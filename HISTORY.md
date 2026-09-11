@@ -4,10 +4,10 @@ This file is append-only. New work must add a dated entry; existing accepted evi
 
 ## Current status
 
-- Status date: 2026-09-10
+- Status date: 2026-09-11
 - Historical analysis reference date: 2024-01-01
-- Current phase: Phase 5 — UIUC demand and W-based withdrawal proxy analysis
-- Completion: Phase 4 accepted; Phase 5 implementation is now active
+- Current phase: Phase 6 — time-aware high-W-risk modeling and course profiles
+- Completion: Phase 6 accepted for the available GPA source; local dashboard for available Phase 3–6 outputs delivered; Phase 7 is next
 - Active data window: primary candidate, 2021–2023
 - DeepSeek model: `deepseek-v4-flash` only
 - DeepSeek API key: expected in local `.env`; never recorded in this log
@@ -325,3 +325,238 @@ The final dashboard and report must answer or explicitly document why the data c
   replaced by fabricated or inferred fields.
 - Next phase: Phase 6 — time-aware Logistic Regression and Random Forest
   comparison, with the Phase 5 proxy definitions carried forward.
+
+## 2026-09-11 — Phase 6 DeepSeek generation blocked after five attempts
+
+### Supervisor review
+
+- Re-read `AGENTS.md`, `PROJECT_SCOPE.md`, `TEMPORAL_DATA_POLICY.md`,
+  `README.md`, `docs/data_dictionary.md`, `docs/SOURCES.md`,
+  `docs/phase5_analysis.md`, the complete prior history, and the accepted
+  Phase 4/5 implementation before starting Phase 6.
+- Confirmed that the repository still contains no Phase 6 module, model
+  outputs, dashboard, or workbook, and that the latest accepted status is
+  Phase 5.
+
+### DeepSeek provenance and rejected attempts
+
+- The configured request name was `deepseek-v4-flash`; the provider reported
+  `deepseek-flash`. A minimal connectivity request returned `PING`, confirming
+  that the local key and endpoint can authenticate.
+- The first full request was blocked by the sandbox because it attempted to
+  send local source/document contents to the external endpoint. A safer,
+  minimized contract-only request was then used after external access was
+  explicitly reviewed; no local source code, history, or raw data was sent.
+- Five Phase 6 implementation-generation attempts were counted. The returned
+  message content was empty on each generation attempt, including a final
+  compact request; no DeepSeek code was copied into `src/`, `scripts/`,
+  `tests/`, or `docs/`.
+
+### Current decision and blocker
+
+- Phase 6 is not accepted and no model result or dashboard claim is supported.
+- The task is paused at the user-requested five-attempt limit. Further work
+  requires either user authorization for Codex to write the primary Phase 6
+  implementation directly, or a user-approved change to the local DeepSeek
+  thinking/output configuration followed by a fresh request.
+- No repository outside `E:\Projects\course-retention-platform` was modified.
+
+## 2026-09-11 — Phase 6 implementation, DeepSeek audit, and local dashboard accepted
+
+### Authorization and implementation
+
+- The user explicitly authorized Codex to implement the primary Phase 6 code,
+  local dashboard, data explanations, and README after five earlier DeepSeek
+  generation attempts returned empty content.
+- Added `src/course_retention/phase6.py`, `scripts/analyze_phase6.py`,
+  `tests/test_phase6.py`, `docs/phase6_modeling.md`, and
+  `dashboard/app.py`. Extended `README.md` and `docs/data_dictionary.md` with
+  Phase 6 field meanings, formulas, feature controls, outputs, and limits.
+- The implementation stays deterministic at runtime: no network call or LLM
+  is required for ingestion, feature construction, modelling, report writing,
+  or dashboard rendering.
+
+### DeepSeek audit and Codex disposition
+
+- Sent the completed core module, CLI, tests, and dashboard to the configured
+  `deepseek-v4-flash` request endpoint for review only. The provider reported
+  `deepseek-flash` and returned an audit report, not replacement code.
+- DeepSeek verified the temporal split, training-only target threshold,
+  current-row leakage exclusions, strict prior-year history construction,
+  train-fitted preprocessing, model setup, robust metrics, deterministic
+  outputs, and unsupported scheduling display.
+- Codex accepted the verified strengths and corrected the material findings:
+  historical joins now use an indexed many-to-one merge with order assertion;
+  `historical_term_count` is named as a term count; `Year_offset` avoids an
+  unseen 2023 one-hot category; K-Means report metadata explicitly discloses
+  that training W proxy is a descriptive profile input; the JSON report now
+  includes the approved-window decision, proxy definitions, and five
+  machine-readable `unsupported` scheduling question records; the dashboard
+  handles the available model/profile outputs and the tests cover these
+  controls.
+- A latent serializer edge case and single-class metric warning were also
+  removed. The DeepSeek report's lower-priority observations about catalog
+  number truncation and current grade features are documented limitations,
+  not evidence of an acceptance failure.
+
+### Accepted Phase 6 outputs and results
+
+- The approved primary window is 2021–2023 with spring/fall; feature rows are
+  8,973, with 5,933 train rows and 3,040 holdout rows. No output row is from
+  2026 or later, and feature row IDs and prediction model/row keys are unique.
+- Training W proxy 75th percentile is `0.0`. Because inclusive `>= 0` would
+  label all training rows positive, the documented tie policy uses strict
+  `W_proxy > 0`: 1,152 train positives / 4,781 negatives and 608 holdout
+  positives / 2,432 negatives.
+- Holdout Logistic Regression: PR-AUC `0.5228`, ROC-AUC `0.7462`, F1
+  `0.3971`, precision `0.2587`, recall `0.8536`, balanced accuracy `0.6211`,
+  Brier `0.3347`, Recall@20% `0.4885`.
+- Holdout Random Forest: PR-AUC `0.5556`, ROC-AUC `0.7725`, F1 `0.4964`,
+  precision `0.4866`, recall `0.5066`, balanced accuracy `0.6865`, Brier
+  `0.1512`, Recall@20% `0.5016`. RF improves ranking/F1 over the majority
+  baseline and Logistic comparator, while Logistic remains the primary
+  interpretable model under the project strategy.
+- K-Means ran descriptively on 2,895 train-course keys with K=2 and silhouette
+  `0.4982`; cluster sizes are 2,784 and 111. W proxy is disclosed as a
+  profile input and is not used in the predictive feature matrix.
+- Generated files are `phase6_feature_table.csv`, `phase6_model_metrics.csv`,
+  `phase6_predictions.csv`, `phase6_feature_importance.csv`,
+  `phase6_course_profiles.csv`, and `phase6_report.json` under
+  `data/processed`.
+
+### Reproducible validation
+
+- Latest offline suite: 32 tests passed with `PYTHONDONTWRITEBYTECODE=1` and
+  pytest cache disabled. AST parsing passed for `src`, `scripts`, and
+  `dashboard` Python files.
+- A second full Phase 6 run matched all six generated file SHA-256 values,
+  including the report after rounding cluster-center display values for stable
+  serialization. The latest report hash is
+  `B85F78FA77757AFED131E5B6E4D633BA33EB44D059EB3CA3D67AB56008ECB93A`.
+- Streamlit started successfully and returned HTTP 200 with the dashboard
+  HTML on local port 8507; the test process was stopped afterward.
+- The dashboard explicitly marks all five scheduling questions unsupported
+  because Course Explorer remains WAF-blocked and the GPA source has no
+  section time, capacity, core-course, or schedule-change fields.
+
+### Supervisor decision and evidence boundary
+
+- Phase 6 is accepted for time-aware association/screening analysis on the
+  available public GPA source. Random Forest is the stronger nonlinear
+  comparator on this holdout, but neither model establishes causal retention
+  effects or an official withdrawal rate.
+- The local dashboard summarizes the available Phase 3–6 results as requested;
+  Excel export, lawful review text, section scheduling, and later phases remain
+  separate work and are not claimed as complete.
+- This independent project remains dated from its actual 2026-09-10 start and
+  is not an ATLAS internship result.
+
+## 2026-09-11 — Strict end-of-term leakage revision superseded provisional Phase 6 metrics
+
+### Supervisor decision
+
+- During final review, Codex identified that current-row `Students`, grade
+  totals, and grade shares can be end-of-term outcomes. Although they are not
+  W fields, using them to predict the same row's W label would weaken the
+  project's historical-feature interpretation. They are now audit-only fields.
+- The accepted predictive matrix is restricted to course level, Subject, Term,
+  numeric `Year_offset`, and strictly earlier-year course aggregates: prior W
+  proxy, prior demand proxy, prior Students, prior grade totals, prior grade
+  shares, and prior observed term count. This is a deliberate accuracy-first
+  revision, not a result-selection optimization.
+- The earlier Phase 6 metrics in the preceding entry were generated before
+  this stricter feature control and are superseded for reporting. The formal
+  outputs and README/docs now use the strict version below.
+
+### Final strict run
+
+- The primary 2021–2023 window still produces 8,973 rows: 5,933 train and
+  3,040 holdout. The train-only threshold remains `0.0` with strict `>` tie
+  policy and class counts 1,152/4,781 train and 608/2,432 holdout.
+- Strict Logistic Regression holdout metrics: PR-AUC `0.5029`, ROC-AUC
+  `0.7357`, F1 `0.4154`, precision `0.2851`, recall `0.7648`, balanced accuracy
+  `0.6427`, Brier `0.2742`, Recall@20% `0.4786`.
+- Strict Random Forest holdout metrics: PR-AUC `0.5293`, ROC-AUC `0.7538`, F1
+  `0.4971`, precision `0.4505`, recall `0.5543`, balanced accuracy `0.6926`,
+  Brier `0.1712`, Recall@20% `0.4836`.
+- K-Means remains K=2, silhouette `0.4982`, with cluster sizes 2,784 and 111;
+  its descriptive W proxy input remains explicitly disclosed and separate from
+  prediction features.
+- Final deterministic SHA-256 values are:
+  `A3816B8BDFC910D51F613F5B1BA1107A42195D515A4D0BB4AE74A002090BBCF9` for
+  the feature table, `E39A1B8A09F4BB4D2A1681E4CA8331C2625DF1D08560F7B1C36234500064DB91`
+  for model metrics, `503E65C46B59C9FE32E9823582F38B5D4A0C0BF756C46E3CA65EEC40DF02915D`
+  for predictions, `B2022A869DC60BE325BE0CA741DAD43FFCF73181CF3738CC34D6A43A9DD3EA89`
+  for profiles, `51767822C6A9BC9B46733A202721FD0F9A5CB7B4D963090C733609E8B50ED361`
+  for feature importance, and `3C2BFBC94C4EA171DF365C1097093B0A080DC0E398940DE044B84FFED50344C8`
+  for the final report.
+- The final strict code passes 32 offline tests, AST syntax checks pass, and a
+  Streamlit smoke run on local port 8507 returned HTTP 200. No other
+  repository was modified.
+
+## 2026-09-11 — Final Phase 6 evidence-chain fields regenerated
+
+- Added final report transparency fields for per-split historical feature
+  coverage, calendar-year aggregation semantics, profile columns actually used
+  after missing-column removal, training/holdout class status, and robust
+  dashboard fallback behavior. These changes do not alter the strict model
+  matrix or the reported holdout metrics.
+- Final Phase 6 outputs were regenerated and matched a second run byte-for-byte.
+  The final `phase6_report.json` SHA-256 is
+  `A99E9A15D26566EE7F5BCE5AF6E10029A1512C3D2058DA853F85B9B24FD08322`.
+- Latest test evidence remains 32 passed; the final dashboard smoke run on
+  local port 8509 returned HTTP 200. The HTML shell check is complemented by
+  the source-level dashboard limitation test; the app itself does not claim
+  unsupported section scheduling capabilities.
+
+## 2026-09-11 — Dashboard explanation and scope-boundary revision
+
+### User-facing changes
+
+- Kept the existing five-page structure, wide layout, chart types, colors, and
+  core filters; added compact page guidance, data inventory, limitation paths,
+  K-Means interpretation, and a plain-language explanation of Streamlit's
+  Deploy entry point.
+- Removed internal phase wording from user-facing dashboard titles, captions,
+  warnings, navigation, and conclusions. Internal output filenames and agent
+  history remain unchanged for reproducibility.
+- Made the overview demand ranking use the active year/term/subject scope and
+  the shared Top-N control. The feature-importance chart now uses the same
+  Top-N control and its scope is shown in the caption.
+- Explained the current K=2 result as a scale-oriented course profile: the
+  two cluster centers have similar W-proxy levels, so the clusters are not
+  interpreted as high/low withdrawal causes.
+- Added explicit statements that the available GPA source has no student-level
+  attendance, LMS activity, registration-event, section-time, capacity, or
+  waitlist fields; added a feasible remedy or fallback for each limitation.
+
+### Governance and documentation
+
+- Added `docs/DASHBOARD_CHANGE_BOUNDARY.md` to constrain later agents to
+  evidence and explanation improvements without redesigning the dashboard.
+- Linked that boundary from `AGENTS.md` and expanded the README with the
+  dashboard purpose, page guide, data meaning, verified results, Deploy
+  explanation, future multi-school route, and likely users.
+
+### Validation to rerun before acceptance
+
+- 32 existing offline tests remain the minimum regression check.
+- Re-run Python compilation, the full test suite, and one local Streamlit HTTP
+  smoke run after the dashboard patch.
+- Cross-check the displayed Top-N rankings, cluster descriptions, formulas,
+  labels, and limitation tables against `data/processed` outputs.
+
+## 2026-09-11 — Dashboard patch validation accepted
+
+- Read-only Python compilation passed for all 13 Python files in `dashboard`,
+  `src/course_retention`, and `scripts` without writing new bytecode caches.
+- The existing offline suite remains green: 32 tests passed.
+- A local Streamlit run on port 8510 loaded the overview, guidance expander,
+  risk page, course-profile page, and data/limitations page successfully.
+- Browser smoke verification confirmed that changing Top-N changes the ranking
+  titles and feature-importance caption, while the model metrics remain fixed.
+- Cross-checked displayed counts against generated outputs: 8,973 rows, 3,336
+  course keys, 152 subjects, K=2, silhouette 0.4982, cluster sizes 2,784/111,
+  and Random Forest holdout PR-AUC 0.5293.
+- No external deployment or UI action was performed; the local server was used
+  only for validation.

@@ -121,6 +121,10 @@ Do not build excessive defensive, stress, browser-matrix, or exhaustive permutat
 - `importlib` may be used only for a modular plugin loader; it is not a dashboard framework.
 - The data pipeline and dashboard must work without DeepSeek.
 
+### Dashboard change boundary
+
+The user-facing dashboard must follow `docs/DASHBOARD_CHANGE_BOUNDARY.md`. Keep the existing visual design and page structure stable; improve explanations, data boundaries, filter scope, and evidence instead of rebuilding the UI. Internal phase names may remain in agent governance, scripts, and history files, but must not appear in dashboard user-facing titles, navigation, captions, conclusions, or help text.
+
 ## 8. Completion definition
 
 A phase is complete only when its DeepSeek-produced code or analysis, the supervisor review, required validation checks, source notes, and output artifact are present in this repository. `HISTORY.md` must record the accepted evidence and current step. The project is complete only when a fresh local run reproduces the cleaned data, metrics, model evaluation, dashboard output, five scheduling-question answers, and documented limitations without changing another repository.

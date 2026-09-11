@@ -111,3 +111,50 @@ it is not an official withdrawal rate.
 year-term coverage, thresholds, formulae, row counts, top rankings, and the
 limitations that follow from the GPA source's lack of section and student
 identifiers.
+
+## Phase 6 modeling outputs
+
+`scripts/analyze_phase6.py` reads the Phase 5 course-term table, filters the
+approved three-year window and spring/fall terms before feature engineering,
+and writes the following deterministic files:
+
+| File | Grain | Meaning |
+| --- | --- | --- |
+| `phase6_feature_table.csv` | course-term | Traceability keys, train/holdout split, W-proxy target label, predictive features, and audit-only source fields. |
+| `phase6_model_metrics.csv` | model-split | Training/holdout row and class counts, PR-AUC, ROC-AUC, F1, precision, recall, balanced accuracy, Brier score, confusion matrix and Recall@K. |
+| `phase6_predictions.csv` | model-course-term | Actual label, predicted probability, 0.5 decision, split, course identity, W proxy and fixed threshold used. |
+| `phase6_feature_importance.csv` | model-encoded-feature | Absolute importance and Logistic Regression coefficient direction, where available. |
+| `phase6_course_profiles.csv` | course | Train-only descriptive K-Means cluster, cluster size and silhouette. |
+| `phase6_report.json` | report | Window, target threshold, tie policy, class counts, feature controls, model fit status, holdout metrics, profile status and limitations. |
+
+### Phase 6 target and feature controls
+
+`high_w_risk` is computed from valid training-year `W_proxy` values only. The
+default threshold is the 75th percentile. If that quantile equals the minimum
+and inclusive `>=` would label every training row positive, the implementation
+uses strict `>` and records this tie policy in the report. The holdout never
+changes the threshold.
+
+Predictive features are `course_level`, `Subject`, `Term`, `Year_offset`,
+`Students`, `grade_total`, available `share_*` columns, and historical
+course-level aggregates. Historical fields are calculated only from rows with
+strictly earlier years in the selected window. Current-row `W`, `W_proxy`,
+`demand_proxy`, rank fields, high-demand flags and the target are excluded from
+the model matrix. Current `Students` is kept as a scale control, but remains a
+source count excluding W, not a registration-event or unique-student measure.
+`historical_term_count` means the number of observed spring/fall terms in prior
+years, not the number of unique students. Historical means are calendar-year
+course aggregates and may mix spring and fall within the prior year; they are
+not same-term lags.
+
+Logistic Regression is the interpretable primary model. Random Forest is a
+fixed-seed nonlinear comparator. Both use train-fitted imputation and encoding;
+the holdout is used only for final evaluation. PR-AUC and Recall@K are included
+because the high-risk label is imbalanced. If a split has one class, undefined
+ranking/calibration fields are left null and the status explains why.
+
+K-Means profiles are calculated from train-only course aggregates and are
+descriptive. They may include the training W proxy mean as a profile input,
+which is separate from predictive features and is explicitly disclosed in the
+report. A profile is skipped when there are too few rows/features, no valid
+silhouette, or a silhouette below the configured quality floor.
