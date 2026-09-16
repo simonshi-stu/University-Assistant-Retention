@@ -4,11 +4,11 @@ This file is append-only. New work must add a dated entry; existing accepted evi
 
 ## Current status
 
-- Status date: 2026-09-11
+- Status date: 2026-09-14
 - Historical analysis reference date: 2024-01-01
-- Current phase: Phase 6 — time-aware high-W-risk modeling and course profiles
-- Completion: Phase 6 accepted for the available GPA source; local dashboard for available Phase 3–6 outputs delivered; Phase 7 is next
-- Active data window: primary candidate, 2021–2023
+- Current phase: Phase 6 accepted; independent 2024 same-term trajectory extension accepted; Phase 7 is next
+- Completion: Phase 6 and the user-approved six-year trajectory extension are accepted for the available GPA source; the local bilingual dashboard is updated; Phase 7 is next
+- Active data window: primary 2021–2023; separate independent trajectory extension 2019–2024
 - DeepSeek model: `deepseek-v4-flash` only
 - DeepSeek API key: expected in local `.env`; never recorded in this log
 - Primary code executor: DeepSeek V4 Flash
@@ -560,3 +560,304 @@ The final dashboard and report must answer or explicitly document why the data c
   and Random Forest holdout PR-AUC 0.5293.
 - No external deployment or UI action was performed; the local server was used
   only for validation.
+## 2026-09-14 — User-approved independent 2024 same-term trajectory extension
+
+### Implementation evidence pending supervisor acceptance
+
+- The user explicitly authorized this Luna implementation sub-agent to write
+  the new module, script, lean tests, and generated outputs in this repository;
+  this is a one-turn exception to the default DeepSeek implementation role.
+- Added `src/course_retention/course_trajectory.py` and
+  `scripts/analyze_course_trajectory.py`. The stable course key is
+  `Subject + Number`; `Course Title` is display-only and a title-change audit
+  records 289 changed keys. Raw data are filtered before aggregation to the
+  six allowed years (2019–2024) and Spring/Fall.
+- Same-term lag design is explicit: 2022 uses 2019–2021, 2023 uses 2020–2022,
+  and 2024 uses 2021–2023. Incomplete three-year same-term histories are
+  excluded from train/holdout metrics. Current 2024 W/Students/grades are
+  retained only for post-prediction comparison.
+- Generated `course_trajectory_table.csv`, `course_trajectory_predictions.csv`,
+  `course_trajectory_metrics.csv`, `course_trajectory_logistic_coefficients.csv`,
+  `course_trajectory_title_audit.csv`, and `course_trajectory_report.json`.
+  The report contains Spring/Fall/all metrics, confusion counts, AP, ROC-AUC,
+  Brier, Recall@20%, coefficient odds ratios/support, title audit, and annual W
+  summaries. 2024 eligible holdout coverage is 1,597 rows (Spring 742, Fall
+  855) out of 3,027 course-term rows; training cohort is 2,981 rows.
+- 2024 all-scope holdout: Logistic AP 0.6105, ROC-AUC 0.7671, Brier 0.1959,
+  Recall@20% 0.4813, confusion TN/FP/FN/TP 842/327/128/300; Random Forest
+  AP 0.6056, ROC-AUC 0.7632, Brier 0.1858, Recall@20% 0.4696,
+  confusion 915/254/159/269. The target is `W > 0` (a W marker), not a
+  high official withdrawal-rate label or a count forecast.
+- The annual W audit records sparse 2020 Fall (12 positive rows, W total 14)
+  and 2021 Spring (10 positive rows, W total 10) observations for review.
+  These are data characteristics, not causal explanations.
+- Added three focused tests in `tests/test_course_trajectory.py`; they passed
+  (`3 passed`). The new script completed once with the real raw file. Existing
+  Phase 6 metadata was corrected so `Subject` is not simultaneously listed as
+  a used and excluded predictive feature.
+
+### Remaining limits
+
+The six-year extension still uses course-level aggregate GPA data without
+student IDs, registration events, sections, capacity, attendance, or causal
+treatments. The same-term cohort restriction improves temporal comparability
+but reduces coverage and cannot establish an official withdrawal rate or
+causal retention effect. Unknown holdout Subject categories are encoded as
+all-zero one-hot values by the documented `handle_unknown` policy.
+
+## 2026-09-14 — Independent review return and corrective regeneration
+
+- Independent review returned the first trajectory output for a P1 identity
+  issue: raw `Subject + Number` keys merged same-term special-topic titles.
+  The implementation now normalizes title punctuation/spacing, creates a
+  `course_variant` only for base keys with same-term normalized-title
+  collisions, and uses that variant across all years. Ordinary courses keep a
+  `base` variant so cross-year title edits remain linked.
+- Regenerated output is marked `generated_pending_supervisor_review`. It has
+  3,603 base course keys, 4,157 variants, 104 collision base keys, 376
+  collision course-term groups, and 313 base keys with cross-year title
+  changes. Predictions now include `course_variant` in their unique key.
+- Predictive features were reduced to course level, same-term lag1–3
+  `W_proxy`, and lag1 `log1p(demand_proxy)` scale, plus Subject/Term. The
+  categorical reference is selected by training support and coefficients
+  include drop-index-derived references, support counts, and low-support
+  warnings. Constant and persistence baselines do not report Recall@20% when
+  tied probabilities make row-level ranking arbitrary.
+- Real regeneration completed: training cohort 2,935 rows and 2024 holdout
+  cohort 1,578 rows. Holdout all-scope Logistic AP 0.6166, ROC-AUC 0.7699,
+  Brier 0.1987, Recall@20% 0.4727, TN/FP/FN/TP 805/352/127/294; Random Forest
+  AP 0.6049, ROC-AUC 0.7664, Brier 0.1913, Recall@20% 0.4679,
+  TN/FP/FN/TP 870/287/136/285.
+- Focused trajectory tests pass (`5 passed`). Full-suite dashboard compatibility
+  failure remains outside this sub-agent's assigned files.
+
+## 2026-09-14 — Second independent review return and conservative identity fix
+
+- Review returned the previous variant rule because it split only same-term
+  collisions. The corrected conservative rule first counts normalized titles
+  over the full 2019–2024 scope for each `Subject + Number`: any base key with
+  more than one normalized title uses normalized title variants in every year;
+  only a six-year single-title base uses `base`.
+- Only trim/lower/collapse whitespace and punctuation are normalized. Acronyms,
+  abbreviations, substantive renames, and rotating topic titles are not
+  aliased automatically and remain a documented coverage limitation.
+- Regenerated output metadata: 3,603 base keys, 4,408 variants, 310
+  multi-title base keys, 104 same-term collision base keys, and 376 collision
+  course-term groups. Training cohort is 2,833 rows; 2024 holdout is 1,538.
+- Holdout all-scope Logistic AP 0.6235, ROC-AUC 0.7751, Brier 0.1974,
+  Recall@20% 0.4672, TN/FP/FN/TP 797/330/123/288; Random Forest AP 0.6100,
+  ROC-AUC 0.7701, Brier 0.1903, Recall@20% 0.4769,
+  TN/FP/FN/TP 849/278/138/273. Constant and persistence Recall@20% remain
+  null with an explicit tied-probability reason.
+- Replaced the fragile dashboard source-string test with a lean contract test
+  for bilingual `cannot_answer`, a five-row scheduling data structure, and the
+  W-proxy boundary. Trajectory plus Phase 6 tests pass (`15 passed`).
+
+## 2026-09-14 — Six-year trajectory extension supervisor acceptance
+
+- Codex resumed the interrupted review from the saved conversation excerpt,
+  repository evidence, generated artifacts, and the two independent read-only
+  sub-agent audits. The Luna implementation exception remained limited to this
+  user-approved follow-up and this repository.
+- Final course identity is conservative and auditable. Across 2019–2024, a
+  six-year single-title `Subject + Number` uses the `base` variant; every
+  multi-title base is split by normalized title in every year. Normalization
+  changes only case, punctuation, and whitespace. The final metadata contains
+  3,603 base keys, 4,408 variants, 310 multi-title bases, 291 bases with titles
+  differing across years, 104 same-term collision bases, and 376 collision
+  course-term groups.
+- Supervisor reconciliation confirmed that raw-to-trajectory `Students` and
+  `W` totals match for every year and term, lag1–3 values come only from the
+  same course variant and same Spring/Fall in prior years, prediction keys have
+  no duplicates, and the declared model matrix excludes current 2024 `W`,
+  `Students`, grades, `W_proxy`, and `demand_proxy` outcome values.
+- The added truth-isolation regression mutates 2024 outcome fields and confirms
+  that model scores do not change. Constant and persistence baselines now give
+  separate, accurate tied-score reasons for leaving Recall@20% unreported.
+- A fresh real-data run completed successfully after explicit write approval.
+  It produced 2,833 training rows, 1,538 eligible 2024 holdout rows out of
+  3,152 observations (Spring 710/1,508; Fall 828/1,644), and 24 metric rows.
+  The expected `handle_unknown="ignore"` warning occurred for holdout Subject
+  categories not seen in training; they are encoded as all-zero one-hot values.
+- Accepted combined 2024 results: Logistic AP 0.6235, ROC-AUC 0.7751, Brier
+  0.1974, Recall@20% 0.4672, TN/FP/FN/TP 797/330/123/288; Random Forest AP
+  0.6100, ROC-AUC 0.7701, Brier 0.1903, Recall@20% 0.4769,
+  TN/FP/FN/TP 849/278/138/273. These are W-mark screening results, not official
+  withdrawal probabilities, count forecasts, causal effects, or deployment
+  guarantees.
+- The bilingual dashboard now reads final trajectory coverage and metrics from
+  regenerated files, labels the old three-year experiment only as a historical
+  comparison when used, displays the 2020 Fall (14 W) and 2021 Spring (10 W)
+  data-review warning, translates coefficient metadata, and invalidates cached
+  data when an artifact modification timestamp changes. The Chinese and English
+  AppTest smoke runs had zero exceptions and displayed the final 1,538/3,152
+  coverage and RF AP 0.610.
+- Both model guides and both READMEs now describe the independent extension and
+  its reproduction command. The dashboard layout and navigation were preserved;
+  no internal phase label was added to the user-facing interface.
+- Final lean verification: the full offline suite passed (`39 passed`), the
+  real trajectory CLI completed once, and post-run metrics/reconciliation
+  checks passed. The generated report intentionally retains
+  `generated_pending_supervisor_review` because generation precedes review;
+  this history entry is the supervisor acceptance record.
+- Accepted SHA-256 evidence: table
+  `0B682E7148298756196F53F521788E75E6448418F7B3CF1B0DB1929BB849EA36`,
+  predictions
+  `227C252FBB8450CD406DD6C498F22DD8E9A2E5DAD10E42B7E293045C6B1CDEBE`,
+  metrics
+  `6B53AAA8928777590D424FFF2F8BF0C9AF6A27D4C6D1577D5F1F336F1CA7BD72`,
+  coefficients
+  `2CDBC54FF472590CBA9E01B1CAEA75BF63A5FCF0C6641E0D5693DAA8F398ACDF`,
+  title audit
+  `EC2F0CB2928263D974E7E73B45B40CF0C756D7529BE71161CDCADAE32559C2E2`,
+  and report
+  `750EA33916ADB6F34953AF82EE978CC4648BEB84350DE5F26D1CA5FB4B72510A`.
+
+## 2026-09-15 — Business W interpretation and enrollment-data investigation
+
+- The project owner clarified the intended business meaning: a W is the formal
+  W grade left after the no-W drop deadline, often near the halfway point for a
+  standard full-term undergraduate course. The documentation records this as
+  an operational interpretation, not a universal week-8 rule; UIUC deadlines
+  vary by part of term, course length, and student level.
+- The source boundary remains explicit: the GPA file contains final W counts,
+  grade-count fields, and Students excluding W, but no withdrawal event/date,
+  registration event, numeric GPA, student id, or official easy-course label.
+- Official-source review found public 10th-day census reports, DMI historical
+  course/section enrollment tables, and daily roster/registration services
+  described as authorized campus data. No public, reproducible paired snapshot
+  for the same section in week one and after week-two/add-drop was found.
+  A future `week1_enrollment - week2_enrollment` measure would be a rough net
+  change, not a gross drop count, and would require CRN/section identity,
+  snapshot dates, capacity, part-of-term and cancellation/merge fields.
+- The proposed relationships between A/A+ share, easier or “water” courses,
+  required-major courses, GPA, and W are recorded as hypotheses for a future
+  descriptive analysis. They are not conclusions from the current six-year
+  trajectory model.
+
+## 2026-09-14 — Continuity diagnostics, reproducible EDA, and bilingual evidence display
+
+- Added course-level continuity and seasonality diagnostics for the independent
+  2019–2024 Spring/Fall trajectory: observed years/terms, period coverage,
+  Spring/Fall pattern, same-term sequence length, training and 2024 backtest
+  eligibility, and explicit exclusion reasons. Missing offerings remain
+  unobserved rather than being filled with zero; partial single-season series
+  are classified as intermittent, while complete single-season series retain a
+  seasonal classification.
+- Added reproducible EDA generation through
+  `scripts/generate_course_trajectory_eda.py` and integrated report/table
+  outputs covering source and filtered size, dtypes, missingness, duplicates,
+  year-term coverage, Subject distribution, numeric summaries, source-to-
+  trajectory reconciliation, and many-to-one join cardinality. The source
+  duplicate-key explanation is documented as multiple instructor/grade-
+  distribution records being aggregated, not duplicate students.
+- Added prediction score error fields and explicit W/drop/GPA boundaries:
+  `W` remains a grade-table W-mark count and `W_proxy` is not an official
+  drop/withdrawal rate; current data has no numeric GPA or official pass/drop
+  event fields. Added bilingual dashboard display for continuity, error,
+  EDA evidence, and exploratory statistical-method guidance while preserving
+  the existing five-tab visual structure.
+- Supervisor verification: the full lean pytest suite passed (`42 passed`);
+  the independent EDA rerun succeeded and its report/coverage matched the
+  generated artifacts; the trajectory CLI temporary-output run succeeded for
+  2019–2024 with 2,833 training rows, 1,538 eligible 2024 holdout rows, and 24
+  metric rows; raw-to-trajectory reconciliation matched Students `1,962,535`
+  and W `5,726`, with no duplicate prediction keys; Chinese and English
+  AppTest smoke runs had zero exceptions and displayed five tabs.
+- Remaining incomplete items are Excel export, real section scheduling data
+  and conflict analysis, lawful course-review text, and numeric GPA/official
+  pass/drop outcomes. No completion claim is made for those items.
+
+## 2026-09-15 — User review correction: stable course identity, W semantics, and evidence
+
+- Addressed the review that the previous `3,817 intermittent` count needed
+  row-level evidence. The trajectory input now uses stable `Subject + Number`;
+  Course Title is display-only and title changes are retained in the title
+  audit. Recognisable Special/Selected Topics are set aside before continuity
+  and modeling, with a separate `course_trajectory_special_topic_audit.csv`.
+- Regenerated continuity evidence from the actual 2019–2024 Spring/Fall
+  source slice. The included ordinary-course population is 3,600 keys:
+  317 `continuous_both_terms` (8.81%), 174 `seasonal_fall` (4.83%), 128
+  `seasonal_spring` (3.56%), and 2,981 `intermittent` (82.81%). The exact
+  observed-period distribution is 1/2/3/4/5/6/7/8/9/10/11/12 cells for
+  832/477/425/306/303/405/130/86/83/88/148/317 keys. The 2021–2023 focus
+  window has observations in all three years for 1,393 keys. These values and
+  each course's `observed_periods` are present in the continuity CSV and
+  dashboard evidence tables.
+- Replaced unconditional same-term matching with adaptive history: ordinary
+  courses use either Spring/Fall from prior calendar years, while genuinely
+  one-season courses use same-season history. The regenerated 2024 eligible
+  coverage is 1,857/3,023 observations (Spring 896/1,452; Fall 961/1,571),
+  with 3,574 training rows. Holdout all-scope Logistic AP/ROC-AUC/Brier/
+  Recall@20% are 0.6110/0.7772/0.1836/0.4860; RF values are
+  0.6177/0.7794/0.1796/0.4708. These remain W-mark screening metrics.
+- Corrected user-facing definitions: W is the formal `Withdraw` mark count;
+  W=0 means no W was observed in final-grade records and does not prove no
+  earlier drop, student adaptation, or absence of a sudden difficulty change.
+  `w_mark_share` is the derived `W/(Students+W)` share, not a W count or
+  official withdrawal rate. `Students` is the final A+–F record count
+  excluding W, not a unique-student or strict completion count.
+- Added `grade_point_mean`, an explicitly labeled 4.0-style weighted estimate
+  from A+–F counts for historical feedback. The source has no official numeric
+  GPA. Added `course_trajectory_instructor_audit.csv` and exposed instructor
+  context in trajectory predictions; names remain audit context because the
+  source has no section id and a course-term can include multiple instructors.
+- Supervisor validation: the final real-data trajectory CLI rerun succeeded;
+  raw-to-analysis Students/W reconciliation is exact after the 34 excluded
+  special-topic source rows; prediction keys have no duplicates; full offline
+  tests pass (`43 passed`); Chinese and English Streamlit AppTest smoke runs
+  report zero exceptions, five tabs, 17 dataframes. The generated report keeps
+  `generated_pending_supervisor_review` as a generation status; this entry is
+  the supervisor acceptance record for the correction.
+
+## 2026-09-15 — Documentation correction: W marks, Students grain, and special-topic rows
+
+- Updated only `docs/MODEL_AND_PROXY_GUIDE_ZH.md`,
+  `docs/MODEL_AND_PROXY_GUIDE_EN.md`, `docs/data_dictionary.md`,
+  `docs/PROJECT_OUTLINE.md`, and this history file. No source, dashboard,
+  test, or processed-data files were changed.
+- Standardised the user-facing meaning of `W` as the formal `Withdraw` mark
+  count and `w_mark_share` as a derived share. The standard 16-week
+  undergraduate roughly-week-8 interpretation is documented as business
+  context only; the source has no withdrawal time or event field. `W=0` only
+  means that W was not observed in aggregated final-grade records and does not
+  establish earlier-drop absence or student adaptation.
+- Documented `Students` as the course-completion A+–F final-grade record count,
+  equal to the source A+–F band sum, not registrations, unique students, or
+  section enrollment. Course-level aggregation may contain multiple instructor
+  records.
+- Re-stated the continuity focus as 2021–2023, with 2024 as bridge history and
+  truth-only holdout; stable identity is `Subject + Number`; ordinary courses
+  use either term from the prior calendar year, while genuinely one-season
+  courses use same-season history.
+- Verified the row-level special-topic decomposition: 34 raw
+  special/selected-topic records touch 11 stable keys; 3 keys are special-only
+  and do not enter the ordinary trajectory, while 8 overlapping keys retain
+  their ordinary rows. The documentation does not treat the 11 keys as one
+  excluded population.
+- Targeted documentation/trajectory validation passed: `16 passed` for
+  `tests/test_dashboard_contract.py` and `tests/test_course_trajectory.py`.
+
+## 2026-09-15 — Final supervisor acceptance: course-trajectory evidence revision
+
+- Final supervisor verification passed: the full offline suite completed with
+  `pytest -q -p no:cacheprovider` reporting `49 passed`. The real
+  `analyze_course_trajectory.py` and `generate_course_trajectory_eda.py`
+  reruns both succeeded. Fifteen generated files were promoted into
+  `data/processed`; the prior generated artifacts remain in
+  `.tmp/trajectory-previous-20260915-1629`.
+- Accepted trajectory evidence records 3,574 training rows, 1,857 2024
+  holdout rows, and 24 metric rows. The ordinary stable-key population is
+  3,600, with continuity counts `317/174/128/2,981`; observed periods 1..12
+  are `832/477/425/306/303/405/130/86/83/88/148/317`; 1,393 keys have
+  observations in each of 2021, 2022, and 2023. The Special Topics row-level
+  decomposition is `34/11/3/8`; the title audit contains 3,600 rows and 309
+  multi-title keys. Prediction-key duplicates are 0, and raw-to-analysis
+  reconciliation is zero.
+- Chinese and English Streamlit AppTest runs each started and switched without
+  exceptions; each exposed 5 tabs and 17 dataframes, with no unreplaced
+  placeholders.
+- This acceptance covers the revised definitions, analysis scope, and
+  evidence trail only. It does not claim that Excel export, schedule-conflict
+  analysis, course-review text analysis, or official GPA is complete. Older
+  history records are retained without rewriting.

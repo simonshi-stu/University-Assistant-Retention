@@ -1,7 +1,7 @@
-r"""Local Streamlit dashboard for the reproducible course-retention outputs.
+r"""Local Streamlit dashboard for reproducible course-retention outputs.
 
-Run from the repository root with:
-    .\.venv\Scripts\python.exe -m streamlit run dashboard\app.py
+Run from the repository root with ``python -m streamlit run dashboard/app.py``.
+The data layer is deliberately unchanged by the language switch.
 """
 
 from __future__ import annotations
@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Iterable
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+from i18n import LANGUAGES, keys_match, t
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,29 +23,46 @@ PROCESSED = ROOT / "data" / "processed"
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-
-st.set_page_config(page_title="高校课程注册与学习留存分析平台", page_icon="📘", layout="wide")
+st.set_page_config(page_title=t("page_title"), page_icon="📘", layout="wide")
 
 
 @st.cache_data(show_spinner=False)
-def load_csv(name: str) -> pd.DataFrame:
+def _load_csv_cached(name: str, modified_ns: int) -> pd.DataFrame:
     path = PROCESSED / name
     if not path.exists():
         raise FileNotFoundError(path)
     return pd.read_csv(path)
 
 
+def load_csv(name: str) -> pd.DataFrame:
+    path = PROCESSED / name
+    return _load_csv_cached(name, path.stat().st_mtime_ns)
+
+
 @st.cache_data(show_spinner=False)
-def load_json(name: str) -> dict:
+def _load_json_cached(name: str, modified_ns: int) -> dict:
     path = PROCESSED / name
     if not path.exists():
         raise FileNotFoundError(path)
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_json(name: str) -> dict:
+    path = PROCESSED / name
+    return _load_json_cached(name, path.stat().st_mtime_ns)
+
+
 def fmt_int(value: object) -> str:
     try:
         return f"{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def fmt_score(value: object) -> str:
+    try:
+        number = float(value)
+        return "—" if pd.isna(number) else f"{number:.3f}"
     except (TypeError, ValueError):
         return "—"
 
@@ -55,31 +75,28 @@ def fmt_pct(value: object, digits: int = 1) -> str:
 
 
 def metric_value(metrics: pd.DataFrame, model: str, field: str, split: str = "holdout") -> object:
+    if metrics.empty or not {"model", "split"}.issubset(metrics.columns):
+        return None
     row = metrics.loc[(metrics["model"] == model) & (metrics["split"] == split)]
     return None if row.empty else row.iloc[0].get(field)
 
 
 def aggregate_course_demand(data: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate the active filter scope to course level for ranking charts."""
+    cols = ["Subject", "Number", "Course Title", "demand_proxy_total", "course_term_count", "W_total", "W_proxy_weighted"]
     if data.empty:
-        return pd.DataFrame(
-            columns=[
-                "Subject",
-                "Number",
-                "Course Title",
-                "demand_proxy_total",
-                "course_term_count",
-                "W_total",
-                "W_proxy_weighted",
-            ]
-        )
-    grouped = (
-        data.groupby(["Subject", "Number", "Course Title"], dropna=False, as_index=False)
-        .agg(
-            demand_proxy_total=("demand_proxy", "sum"),
-            course_term_count=("demand_proxy", "size"),
-            W_total=("W", "sum"),
-        )
+        return pd.DataFrame(columns=cols)
+    def representative_title(values: pd.Series) -> str:
+        titles = values.dropna().astype(str).str.strip()
+        titles = titles.loc[titles.ne("")]
+        return titles.iloc[0] if not titles.empty else ""
+
+    grouped = data.groupby(["Subject", "Number"], dropna=False, as_index=False).agg(
+        **{
+            "Course Title": pd.NamedAgg(column="Course Title", aggfunc=representative_title),
+            "demand_proxy_total": pd.NamedAgg(column="demand_proxy", aggfunc="sum"),
+            "course_term_count": pd.NamedAgg(column="demand_proxy", aggfunc="size"),
+            "W_total": pd.NamedAgg(column="W", aggfunc="sum"),
+        }
     )
     grouped["W_proxy_weighted"] = grouped["W_total"].div(grouped["demand_proxy_total"].where(grouped["demand_proxy_total"] > 0))
     return grouped
@@ -89,104 +106,371 @@ def course_label(data: pd.DataFrame) -> pd.Series:
     return data["Subject"].astype(str) + " " + data["Number"].astype(str) + " · " + data["Course Title"].astype(str)
 
 
-def render_dashboard_guide(top_n: int, rf_pr: object, profile_meta: dict) -> None:
-    with st.expander("看板说明：每个页面看什么，以及结论如何使用", expanded=False):
-        guide = pd.DataFrame(
-            [
-                ["总览", "看当前筛选范围的覆盖量、需求代理榜和留出集模型表现。", "高需求课程值得优先关注，但榜单不是注册量或容量排名。"],
-                ["需求与 W 代理", "看课程需求代理的时间趋势，以及需求代理与 W 代理的分布关系。", "可以发现描述性关联和需要复核的课程，不能证明退课原因。"],
-                ["预测风险", "看按历史信息筛选高 W 代理课程的留出集表现和预测排序。", "模型可用于优先级筛查；不能把概率当成官方退课率或因果效果。"],
-                ["课程画像", "看具有相似规模、成绩结构和历史代理特征的课程画像。", "当前两类主要体现小规模与大规模课程观察的差异，不是学生群体或原因分组。"],
-                ["数据与限制", "查公式、数据源、可回答问题和缺失字段。", "当页面显示“数据不足”时，优先补充 section 时间、容量或事件级数据，而不是猜测。"],
-            ],
-            columns=["页面", "主要内容", "当前结论"],
-        )
+def model_label(model: object, lang: str) -> str:
+    labels = {
+        "majority_baseline": {"zh": "多数类基线", "en": "Majority baseline"},
+        "constant_baseline": {"zh": "常数基线", "en": "Constant baseline"},
+        "persistence_baseline": {"zh": "持续性基线", "en": "Persistence baseline"},
+        "logistic_regression": {"zh": "Logistic 回归", "en": "Logistic regression"},
+        "random_forest": {"zh": "随机森林", "en": "Random forest"},
+    }
+    return labels.get(str(model), {"zh": str(model), "en": str(model)})[lang]
+
+
+def term_label(value: object, lang: str) -> str:
+    mapping = {"spring": {"zh": "春季", "en": "Spring"}, "fall": {"zh": "秋季", "en": "Fall"}}
+    return mapping.get(str(value).lower(), {"zh": str(value), "en": str(value)})[lang]
+
+
+def translated_model_columns(lang: str) -> dict[str, str]:
+    return {
+        "model": "模型" if lang == "zh" else "Model",
+        "status": "状态" if lang == "zh" else "Status",
+        "rows": "行数" if lang == "zh" else "Rows",
+        "positive_count": "正类数" if lang == "zh" else "Positive count",
+        "negative_count": "负类数" if lang == "zh" else "Negative count",
+        "pr_auc": "AP" if lang == "zh" else "AP",
+        "roc_auc": "ROC-AUC",
+        "f1": "F1",
+        "precision": "Precision",
+        "recall": "Recall",
+        "balanced_accuracy": "Balanced accuracy" if lang == "en" else "Balanced accuracy",
+        "brier_score": "Brier score",
+        "recall_at_k": "Recall@20%",
+        "tn": "TN",
+        "fp": "FP",
+        "fn": "FN",
+        "tp": "TP",
+    }
+
+
+def find_column(frame: pd.DataFrame, names: Iterable[str]) -> str | None:
+    for name in names:
+        if name in frame.columns:
+            return name
+    return None
+
+
+def load_trajectory_outputs() -> tuple[pd.DataFrame, pd.DataFrame, dict, pd.DataFrame] | None:
+    names = ["course_trajectory_metrics.csv", "course_trajectory_predictions.csv", "course_trajectory_report.json", "course_trajectory_logistic_coefficients.csv"]
+    if not all((PROCESSED / name).exists() for name in names):
+        return None
+    return load_csv(names[0]), load_csv(names[1]), load_json(names[2]), load_csv(names[3])
+
+
+def load_trajectory_continuity() -> pd.DataFrame | None:
+    path = PROCESSED / "course_trajectory_continuity.csv"
+    return load_csv(path.name) if path.exists() else None
+
+
+def load_special_topic_audit() -> pd.DataFrame | None:
+    path = PROCESSED / "course_trajectory_special_topic_audit.csv"
+    return load_csv(path.name) if path.exists() else None
+
+
+def resolve_special_topic_breakdown(meta: dict, continuity: pd.DataFrame | None, special_topic_audit: pd.DataFrame | None) -> dict[str, int] | None:
+    """Prefer explicit metadata; derive the same stable-key split from audit rows when needed."""
+    def metadata_int(names: tuple[str, ...]) -> int | None:
+        for name in names:
+            value = meta.get(name)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    keys = metadata_int(("special_topic_course_keys_with_rows", "special_topic_course_keys_involved"))
+    only = metadata_int(("special_topic_only_course_keys_excluded", "special_topic_only_course_keys"))
+    overlap = metadata_int(("special_topic_overlap_course_keys_retained", "special_topic_overlap_retained_course_keys", "special_topic_overlap_retained"))
+    if keys is not None and only is not None and overlap is None and 0 <= only <= keys:
+        overlap = keys - only
+    if keys is not None and only is not None and overlap is not None:
+        return {"keys": keys, "overlap": overlap, "only": only}
+
+    required = {"Subject", "Number"}
+    if special_topic_audit is None or continuity is None or not required.issubset(special_topic_audit.columns) or not required.issubset(continuity.columns):
+        return None
+    topic_keys = set(zip(special_topic_audit["Subject"].astype(str), special_topic_audit["Number"].astype(str)))
+    retained_keys = set(zip(continuity["Subject"].astype(str), continuity["Number"].astype(str)))
+    overlap_keys = topic_keys & retained_keys
+    return {"keys": len(topic_keys), "overlap": len(overlap_keys), "only": len(topic_keys - retained_keys)}
+
+
+def load_trajectory_eda() -> dict | None:
+    path = PROCESSED / "course_trajectory_eda_report.json"
+    return load_json(path.name) if path.exists() else None
+
+
+def canonical_trajectory_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Adapt trajectory output column aliases without changing its values."""
+    aliases = {
+        "Year": ["Year", "year", "target_year", "prediction_year"],
+        "Term": ["Term", "term", "season"],
+        "Subject": ["Subject", "subject", "subject_code"],
+        "Number": ["Number", "number", "course_number"],
+        "Course Title": ["Course Title", "course_title", "title"],
+        "course_variant": ["course_variant", "variant", "title_variant"],
+        "term_match_mode": ["term_match_mode", "history_term_rule"],
+        "grade_point_mean": ["grade_point_mean", "estimated_grade_point_mean"],
+        "instructor_count": ["instructor_count"],
+        "instructors_observed": ["instructors_observed", "primary_instructors"],
+        "actual_w": ["actual_w", "actual_w_mark", "actual_w_flag", "actual_high_w_risk", "actual", "y_true"],
+        "predicted_probability": ["predicted_probability", "predicted_prob", "probability", "score", "prediction_score"],
+        "predicted_w": ["predicted_w", "predicted_w_flag", "predicted_high_w_risk", "predicted", "y_pred"],
+    }
+    out = pd.DataFrame(index=predictions.index)
+    for target, candidates in aliases.items():
+        source = find_column(predictions, candidates)
+        if source:
+            out[target] = predictions[source]
+    for key in ["Year", "Term", "Subject", "Number", "Course Title"]:
+        if key not in out:
+            out[key] = ""
+    for key in ["model", "split"]:
+        source = find_column(predictions, [key])
+        if source:
+            out[key] = predictions[source]
+    out["course"] = out["Subject"].astype(str) + " " + out["Number"].astype(str)
+    return out
+
+
+def render_dashboard_guide(lang: str, top_n: int, profile_meta: dict) -> None:
+    with st.expander("看板说明：每个页面看什么，以及结论如何使用" if lang == "zh" else "Guide: what to look at and how to use conclusions", expanded=False):
+        guide = pd.DataFrame([
+            [t("overview", lang), "看筛选范围、规模代理榜和时间留出集表现。" if lang == "zh" else "Review scope, volume rankings, and time-holdout performance.", "榜单是描述性筛查，不是注册量或容量排名。" if lang == "zh" else "Rankings are descriptive screens, not enrollment or capacity rankings."],
+            [t("demand", lang), "看课程规模、W 标记和派生占比。" if lang == "zh" else "Review course volume, W marks, and the derived share.", "可见关联，不证明退课原因。" if lang == "zh" else "Associations are visible; causes are not established."],
+            [t("prediction", lang), "看 W 标记筛查的留出表现和排序。" if lang == "zh" else "Review holdout performance and W-mark ranking.", "模型是复核优先级工具，不是官方概率。" if lang == "zh" else "Models prioritise review; they are not official probabilities."],
+            [t("profiles", lang), "看相似课程的规模画像。" if lang == "zh" else "Review similar-course volume profiles.", "K-Means 是探索性附录，不是学生群体或原因分组。" if lang == "zh" else "K-Means is an exploratory appendix, not student or cause groups."],
+            [t("data_limits", lang), "查字段、数据边界和五个排课问题。" if lang == "zh" else "Check fields, boundaries, and five scheduling questions.", "数据不足时显示缺失字段和可行路径。" if lang == "zh" else "When data is insufficient, missing fields and practical paths are shown."],
+        ], columns=["页面" if lang == "zh" else "Page", "看什么" if lang == "zh" else "Look at", "结论边界" if lang == "zh" else "Boundary"])
         st.dataframe(guide, use_container_width=True, hide_index=True)
-        st.caption(f"当前 Top-N = {top_n}；只作用于带有“前 N 名”标识的榜单，不会改变模型训练或留出集指标。")
-        if rf_pr is not None and not pd.isna(rf_pr):
-            st.caption(f"当前随机森林留出集 PR-AUC 为 {float(rf_pr):.3f}；它衡量排序/区分表现，不是准确率，也不是退课率。")
+        st.caption((f"当前 Top-N = {top_n}；只影响标题明确标注的榜单。" if lang == "zh" else f"Current Top N = {top_n}; it affects only rankings explicitly labelled as Top N."))
         if profile_meta.get("status") == "ok":
-            st.caption("课程画像的 K 值由训练期画像特征与轮廓系数选择；画像用于相似性观察，不用于因果解释。")
+            st.caption("画像用于相似性观察，不用于预测或因果解释。" if lang == "zh" else "Profiles are for similarity exploration, not prediction or causal interpretation.")
 
 
-def render_data_inventory() -> None:
-    st.subheader("当前可用数据与分析边界")
-    inventory = pd.DataFrame(
-        [
-            [
-                "公开 UIUC GPA 成绩分布",
-                "已接入",
-                "课程-学期-教师成绩分布；含 Year、Term、Subject、Number、Course Title、各成绩档位与 W",
-                "需求代理、W 代理、课程画像、历史特征和时间留出集筛查",
-                "不是独立学生表、注册事件、section、容量、waitlist 或 attendance",
-            ],
-            [
-                "UIUC Course Explorer",
-                "未纳入当前指标",
-                "理论上可提供 section、授课时间等课程安排字段；本次请求被访问保护拦截",
-                "若取得合法且可复现的数据，可支持时间冲突、容量和排课变更分析",
-                "当前不能回答具体 section 冲突、拥挤时段或调课后的学生变化",
-            ],
-            [
-                "Attendance / LMS / 学生参与",
-                "当前不可用",
-                "没有合法、可识别且带时间标签的学生级出勤或在线活动数据",
-                "未来接入后可分析参与度与课程结果的关联；需遵守隐私与授权",
-                "当前不能把 GPA 记录解释成出勤、参与人数或独立学生数",
-            ],
-            [
-                "课程评论 / ICES 文本",
-                "未启用",
-                "缺少可合法使用、可匹配课程且带时间标签的文本",
-                "未来可做主题/情绪与 W 代理的描述性关联",
-                "当前不展示情绪分数，也不虚构学生体验结论",
-            ],
-        ],
-        columns=["数据类型", "状态", "目前可见内容", "可以支持什么", "不能支持什么"],
-    )
-    st.dataframe(inventory, use_container_width=True, hide_index=True)
-
-
-def render_field_table() -> None:
-    st.subheader("字段与指标含义")
-    fields = pd.DataFrame(
-        [
-            ["Year / Term", "课程开设年份与学期；本看板只展示 2021–2023 spring/fall。", "时间过滤与训练/留出切分"],
-            ["Subject / Number / Course Title", "课程身份键；标题变化会形成不同课程键。", "课程-学期追踪，不代表 section"],
-            ["Students", "源数据中不含 W 的成绩人数。", "需求代理组成部分；不是注册事件数或独立学生数"],
-            ["W", "源数据中记录为 W 的人数。", "W proxy 分子；不是官方退课记录时点"],
-            ["demand_proxy", "Students + W。", "描述性需求代理，不是 enrollment/capacity/waitlist"],
-            ["W_proxy", "W / (Students + W)，仅在计数有效且分母大于 0 时计算。", "退课代理，不是官方 withdrawal/drop rate"],
-            ["high_w_risk", "用训练期 W_proxy 阈值定义的高代理风险标签；阈值固定应用于 2023 留出集。", "二分类筛查目标，不是官方退课标签"],
-            ["historical_*", "严格早于当前年份的课程历史均值/观察次数。", "可用于预测特征，避免使用未来行"],
-            ["PR-AUC / ROC-AUC", "留出集上的排序/区分能力指标。", "类别不平衡时优先关注 PR-AUC"],
-            ["Recall@K", "按预测概率排序的留出集前 20% 行覆盖了多少真实高代理风险行。", "检验优先复核排序，不等于总体召回"],
-        ],
-        columns=["字段/指标", "数据含义", "本项目用途与限制"],
-    )
+def render_field_table(lang: str, analysis_window: list[int]) -> None:
+    fields = pd.DataFrame([
+        ["Year / Term", (f"课程开设年份与学期；当前窗口为 {analysis_window} 的 spring/fall。" if lang == "zh" else f"Offering year and term; current window is {analysis_window}, spring/fall."), "时间过滤与留出切分" if lang == "zh" else "Time filters and holdout split"],
+        ["Subject / Number / variant", "课程身份固定为 Subject+Number；variant 保留为兼容字段并固定为 base。标题变化只进审计；特殊主题行按行暂放，special-only 键不入普通轨迹，重叠键的普通行保留。" if lang == "zh" else "Course identity is Subject+Number; variant is a compatibility field fixed to base. Title changes go to audit; special-topic rows are set aside at row level, special-only keys are excluded from the ordinary trajectory, and ordinary rows for overlapping keys are retained.", "同课程追踪，不代表 section" if lang == "zh" else "Same-course tracking, not sections"],
+        ["Course Title", "源表标题；只用于展示和改名审计，不决定课程身份。" if lang == "zh" else "Source title; used for display and rename audit, not course identity.", "辅助解释" if lang == "zh" else "Supporting context"],
+        ["Students", t("students_definition", lang), "课程规模的观测组成部分" if lang == "zh" else "Observed course-volume component"],
+        ["W", t("w_semantics_note", lang), "观测结果，不是事件时间线" if lang == "zh" else "Observed outcome, not an event timeline"],
+        ["demand_proxy", t("observed_proxy_formula", lang), "描述性规模代理，不是注册请求、容量或 waitlist。" if lang == "zh" else "Descriptive volume proxy, not registration requests, capacity, or waitlist."],
+        ["w_mark_share", t("w_formula", lang), "派生占比；W 本身仍是计数，不是官方退课率。" if lang == "zh" else "Derived share; W itself remains a count, not an official withdrawal rate."],
+        ["grade_point_mean", "由 A+–F 计数按 4.0 风格换算的估算平均绩点，不是源表官方 GPA。" if lang == "zh" else "Estimated 4.0-style mean from A+–F counts, not an official GPA field.", "同课程历史反馈参考" if lang == "zh" else "Historical course-feedback reference"],
+        ["Primary Instructor", t("instructor_limit_note", lang), "课程-学期审计上下文" if lang == "zh" else "Course-term audit context"],
+        ["high_w_risk", "是否出现 W 标记的二分类筛查目标。" if lang == "zh" else "Binary screening target for whether a W mark appears.", "不是高退课概率" if lang == "zh" else "Not a high-withdrawal probability"],
+        ["historical_*", "严格早于当前年份的历史聚合，避免未来信息进入特征。" if lang == "zh" else "Aggregates strictly earlier than the current year to avoid future information.", "时间感知特征" if lang == "zh" else "Time-aware feature"],
+        ["AP / ROC-AUC", "AP 是 Average Precision；二者衡量排序/区分表现。" if lang == "zh" else "AP is Average Precision; both measure ranking/discrimination.", "不代表退课率" if lang == "zh" else "Not a withdrawal rate"],
+        ["Recall@20%", "预测分数最高 20% 行覆盖的真实正类比例。" if lang == "zh" else "Share of true positives covered by the top 20% scored rows.", "复核优先级排序" if lang == "zh" else "Review-priority ranking"],
+    ], columns=["字段 / 指标" if lang == "zh" else "Field / metric", "数据含义" if lang == "zh" else "Meaning", "用途与限制" if lang == "zh" else "Use and limit"])
     st.dataframe(fields, use_container_width=True, hide_index=True)
 
 
-def main() -> None:
-    st.title("📘 高校课程注册与学习留存分析平台")
-    st.caption("公开 UIUC GPA 数据｜需求与 W 代理｜时间感知风险筛查｜本地可复现看板")
-
-    required = [
-        "course_term_demand_metrics.csv",
-        "course_demand_summary.csv",
-        "phase5_report.json",
-        "phase6_feature_table.csv",
-        "phase6_model_metrics.csv",
-        "phase6_predictions.csv",
-        "phase6_course_profiles.csv",
-        "phase6_report.json",
+def render_inventory(lang: str) -> None:
+    rows = [
+        ["公开 UIUC GPA 成绩分布" if lang == "zh" else "Public UIUC GPA grade distribution", t("status_available", lang), "课程-学期-教师成绩分布；含 Year、Term、Subject、Number、Course Title、成绩档位、W 和 Primary Instructor" if lang == "zh" else "Course-term-instructor grade distribution with year, term, course identity, grades, W, and Primary Instructor", "支持课程规模、W 标记、估算成绩反馈和时间留出筛查。" if lang == "zh" else "Supports course volume, W marks, estimated grade feedback, and time-holdout screening.", "不是独立学生表、注册事件、section、容量、waitlist 或 attendance。" if lang == "zh" else "Not a unique-student table, registration events, sections, capacity, waitlist, or attendance."],
+        ["课程安排数据" if lang == "zh" else "Course scheduling data", t("status_not_used", lang), "当前没有可复现的 section meeting day/start/end、容量或 waitlist 字段。" if lang == "zh" else "No reproducible section meeting day/start/end, capacity, or waitlist fields are available.", "获得合法数据后可构建冲突图和时段分析。" if lang == "zh" else "Licensed data could support conflict graphs and time-slot analysis.", "当前不能回答具体 section 冲突、拥挤时段或调课后变化。" if lang == "zh" else "Cannot answer section conflicts, crowded time slots, or post-change effects."],
+        ["Attendance / LMS / 学生参与" if lang == "zh" else "Attendance / LMS / participation", t("status_unavailable", lang), "没有合法、可识别且带时间标签的学生级活动数据。" if lang == "zh" else "No lawful, identifiable, time-labelled student activity data.", "未来授权接入后可做描述性关联。" if lang == "zh" else "Could support descriptive associations after authorised access.", "不能把 GPA 记录解释成出勤、参与人数或独立学生数。" if lang == "zh" else "GPA records cannot be interpreted as attendance, participants, or unique students."],
+        ["课程评论 / ICES 文本" if lang == "zh" else "Course reviews / ICES text", t("status_not_enabled", lang), "缺少可合法使用、可匹配课程且带时间标签的文本。" if lang == "zh" else "No lawful, course-matchable, time-labelled text is available.", "未来可做主题与 W 标记占比的描述性关联。" if lang == "zh" else "Could support descriptive topic associations with W-mark share.", "当前不展示情绪分数或体验结论。" if lang == "zh" else "No sentiment score or experience conclusion is shown."],
     ]
+    st.dataframe(pd.DataFrame(rows, columns=["数据类型" if lang == "zh" else "Data", "状态" if lang == "zh" else "Status", "目前可见内容" if lang == "zh" else "Available now", "可以支持什么" if lang == "zh" else "Can support", "不能支持什么" if lang == "zh" else "Cannot support"]), use_container_width=True, hide_index=True)
+
+
+def render_trajectory(lang: str, trajectory: tuple[pd.DataFrame, pd.DataFrame, dict, pd.DataFrame], top_n: int, continuity: pd.DataFrame | None = None) -> None:
+    metrics, raw_predictions, report, coefficients = trajectory
+    predictions = canonical_trajectory_predictions(raw_predictions)
+    years = pd.to_numeric(predictions["Year"], errors="coerce")
+    terms = predictions["Term"].astype(str).str.lower()
+    view = predictions.loc[(years == 2024) & terms.isin(["spring", "fall"]) & (predictions.get("split", "holdout") == "holdout")].copy()
+    st.subheader(t("trajectory_title", lang))
+    st.caption(t("trajectory_note", lang))
+    st.markdown(t("prediction_error_note", lang))
+    st.info(t("w_semantics_note", lang))
+    st.caption(t("gpa_estimate_note", lang))
+    st.caption(t("instructor_limit_note", lang))
+    summary = report.get("w_year_term_summary", []) if isinstance(report, dict) else []
+    anomaly_periods = []
+    for item in summary:
+        if int(item.get("Year", 0)) == 2020 and str(item.get("Term", "")).lower() == "fall":
+            anomaly_periods.append(f"2020 {term_label('fall', lang)} ({int(item.get('w_total', 0))} W)")
+        if int(item.get("Year", 0)) == 2021 and str(item.get("Term", "")).lower() == "spring":
+            anomaly_periods.append(f"2021 {term_label('spring', lang)} ({int(item.get('w_total', 0))} W)")
+    if anomaly_periods:
+        separator = "、" if lang == "zh" else ", "
+        st.warning(t("w_anomaly_warning", lang, periods=separator.join(anomaly_periods)))
+    model_choices = sorted(view["model"].dropna().unique().tolist()) if "model" in view else []
+    model_default = model_choices.index("logistic_regression") if "logistic_regression" in model_choices else (model_choices.index("random_forest") if "random_forest" in model_choices else 0)
+    model_pick = st.selectbox("查看课程轨迹模型" if lang == "zh" else "Trajectory model", model_choices, index=model_default, format_func=lambda x: model_label(x, lang)) if model_choices else None
+    if model_pick:
+        view = view.loc[view["model"] == model_pick].copy()
+    if view.empty:
+        st.info("当前课程轨迹输出没有 2024 Spring/Fall 同课程同学期记录。" if lang == "zh" else "The course-trajectory outputs contain no 2024 Spring/Fall same-course, same-term rows.")
+    else:
+        view["学期" if lang == "zh" else "Term"] = view["Term"].map(lambda x: term_label(x, lang))
+        view = view.sort_values("predicted_probability", ascending=False).head(top_n)
+        rename = {"Year": "年份" if lang == "zh" else "Year", "Subject": "Subject", "Number": "Number", "Course Title": "课程标题" if lang == "zh" else "Course title", "actual_w": "实际 W 标记" if lang == "zh" else "Actual W mark", "predicted_probability": "模型分数" if lang == "zh" else "Model score", "predicted_w": "预测 W 标记" if lang == "zh" else "Predicted W mark", "term_match_mode": "历史匹配" if lang == "zh" else "History match", "grade_point_mean": "估算平均绩点" if lang == "zh" else "Estimated grade-point mean", "instructor_count": "教师数" if lang == "zh" else "Instructor count", "instructors_observed": "观察到的教师" if lang == "zh" else "Instructors observed"}
+        keep = [c for c in ["Year", "学期" if lang == "zh" else "Term", "Subject", "Number", "Course Title", "term_match_mode", "instructor_count", "instructors_observed", "grade_point_mean", "actual_w", "predicted_probability", "predicted_w"] if c in view]
+        if "course_variant" in keep and view["course_variant"].astype(str).str.lower().isin(["", "base", "nan", "none"]).all():
+            keep.remove("course_variant")
+        rename["course_variant"] = "课程标题变体" if lang == "zh" else "Course title variant"
+        st.dataframe(view[keep].rename(columns=rename), use_container_width=True, hide_index=True)
+    if continuity is not None and not continuity.empty:
+        meta = report.get("metadata", {}) if isinstance(report, dict) else {}
+        special_topic_audit = load_special_topic_audit()
+        special_breakdown = resolve_special_topic_breakdown(meta, continuity, special_topic_audit)
+        st.subheader(t("continuity_title", lang))
+        st.caption(t("continuity_note", lang))
+        st.caption(t("continuity_scope_note", lang))
+        class_counts = continuity.groupby("continuity_class", as_index=False).agg(course_count=("Subject", "size"), share=("Subject", lambda values: len(values) / len(continuity)), median_observed_periods=("observed_period_count", "median"))
+        class_counts["continuity_class"] = class_counts["continuity_class"].map({
+            "continuous_both_terms": "全年双学期连续" if lang == "zh" else "Continuous both terms",
+            "seasonal_spring": "春季季节性" if lang == "zh" else "Spring-seasonal",
+            "seasonal_fall": "秋季季节性" if lang == "zh" else "Fall-seasonal",
+            "intermittent": "间歇" if lang == "zh" else "Intermittent",
+        }).fillna(class_counts["continuity_class"])
+        class_counts = class_counts.rename(columns={"continuity_class": t("continuity_class", lang), "course_count": t("course_keys", lang), "share": "占全部课程键比例" if lang == "zh" else "Share of course keys", "median_observed_periods": "观察学期数中位数" if lang == "zh" else "Median observed periods"})
+        st.dataframe(class_counts, use_container_width=True, hide_index=True)
+        special_rows = int(meta.get("special_topic_raw_rows_excluded", 0) or 0)
+        if special_rows:
+            if special_breakdown is not None:
+                st.caption(t("special_topic_note", lang, rows=special_rows, **special_breakdown))
+            else:
+                st.caption(t("special_topic_metadata_unavailable", lang, rows=special_rows))
+        st.subheader(t("continuity_evidence_title", lang))
+        st.caption(t("continuity_evidence_note", lang))
+        period_distribution = continuity.groupby("observed_period_count", as_index=False).agg(course_count=("Subject", "size"))
+        period_distribution["share"] = period_distribution["course_count"].div(len(continuity))
+        period_distribution = period_distribution.rename(columns={"observed_period_count": "实际观察学期数" if lang == "zh" else "Observed periods", "course_count": t("course_keys", lang), "share": "占全部课程键比例" if lang == "zh" else "Share of course keys"})
+        st.dataframe(period_distribution, use_container_width=True, hide_index=True)
+        st.caption(t("primary_window_evidence", lang))
+        primary_distribution = report.get("continuity_primary_2021_2023_year_distribution", []) if isinstance(report, dict) else []
+        if primary_distribution:
+            primary_view = pd.DataFrame(primary_distribution).rename(columns={"primary_2021_2023_observed_year_count": "2021–2023 实际出现年份数" if lang == "zh" else "Observed 2021–2023 years", "course_count": t("course_keys", lang), "share": "占全部课程键比例" if lang == "zh" else "Share of course keys"})
+            st.dataframe(primary_view, use_container_width=True, hide_index=True)
+        shown_columns = [c for c in ["Subject", "Number", "observed_period_count", "observed_year_count", "spring_count", "fall_count", "term_match_mode", "observed_periods", "continuity_class", "backtest_2024_eligible", "excluded_reason"] if c in continuity.columns]
+        shown = continuity.loc[:, shown_columns].copy()
+        if "backtest_2024_eligible" in shown:
+            shown = shown.loc[~shown["backtest_2024_eligible"] & shown["continuity_class"].eq("intermittent")].head(100)
+        if not shown.empty:
+            shown = shown.rename(columns={"observed_period_count": "实际观察学期数" if lang == "zh" else "Observed periods", "observed_year_count": "实际观察年份数" if lang == "zh" else "Observed years", "spring_count": "Spring 次数" if lang == "zh" else "Spring count", "fall_count": "Fall 次数" if lang == "zh" else "Fall count", "term_match_mode": "历史匹配" if lang == "zh" else "History match", "observed_periods": "实际观察格" if lang == "zh" else "Observed cells", "continuity_class": t("continuity_class", lang), "backtest_2024_eligible": t("backtest_eligible", lang), "excluded_reason": t("excluded_reason", lang)})
+            st.dataframe(shown, use_container_width=True, hide_index=True)
+    # The report owns coverage numbers; this view never embeds a stale literal.
+    coverage = report.get("coverage_by_target_year_term", {}).get("2024", {}) if isinstance(report, dict) else {}
+    coverage_rows = []
+    for term in ["spring", "fall"]:
+        item = coverage.get(term, {})
+        coverage_rows.append([term_label(term, lang), item.get("eligible_rows"), item.get("all_rows")])
+    if coverage_rows:
+        eligible = sum(int(r[1]) for r in coverage_rows if r[1] is not None)
+        all_rows = sum(int(r[2]) for r in coverage_rows if r[2] is not None)
+        coverage_rows.insert(0, ["全部" if lang == "zh" else "All", eligible, all_rows])
+        st.caption((f"{t('coverage', lang)}：主指标纳入 eligible 行 {eligible:,} / 2024 全部观察 {all_rows:,}；历史不足的行排除。" if lang == "zh" else f"{t('coverage', lang)}: {eligible:,} eligible rows / {all_rows:,} total 2024 observations; incomplete-history rows are excluded."))
+        st.dataframe(pd.DataFrame(coverage_rows, columns=[t("term", lang), "主指标行" if lang == "zh" else "Eligible rows", "全部观察" if lang == "zh" else "All observations"]), use_container_width=True, hide_index=True)
+    metric_view = metrics.copy()
+    if model_pick and "model" in metric_view:
+        metric_view = metric_view.loc[(metric_view["model"] == model_pick) & (metric_view.get("split", "holdout") == "holdout") & metric_view.get("scope", "all").isin(["all", "spring", "fall"])].copy()
+    if not metric_view.empty:
+        metric_columns = ["scope", "rows", "status", "average_precision_ap", "roc_auc", "brier_score", "precision", "recall", "f1", "balanced_accuracy", "recall_at_20pct", "tn", "fp", "fn", "tp"]
+        metric_columns = [c for c in metric_columns if c in metric_view]
+        metric_view = metric_view[metric_columns].rename(columns={"scope": t("metrics_scope", lang), "rows": "行数" if lang == "zh" else "Rows", "status": "状态" if lang == "zh" else "Status", "average_precision_ap": "AP", "recall_at_20pct": "Recall@20%", "brier_score": "Brier"})
+        if t("metrics_scope", lang) in metric_view:
+            metric_view[t("metrics_scope", lang)] = metric_view[t("metrics_scope", lang)].map(lambda x: "全部" if x == "all" and lang == "zh" else ("All" if x == "all" else term_label(x, lang)))
+        status_column = "状态" if lang == "zh" else "Status"
+        if status_column in metric_view:
+            metric_view[status_column] = metric_view[status_column].replace({"ok": "可用" if lang == "zh" else "Available", "one_class": "单一类别" if lang == "zh" else "One class"})
+        st.subheader(("2024 真实留出指标" if lang == "zh" else "2024 truth-only holdout metrics") + (f" · {model_label(model_pick, lang)}" if model_pick else ""))
+        st.dataframe(metric_view.map(lambda x: fmt_score(x) if isinstance(x, float) else x), use_container_width=True, hide_index=True)
+    if not coefficients.empty:
+        st.subheader(t("coefficients", lang))
+        st.markdown(t("logistic_explain", lang))
+        coeff_view = coefficients.head(top_n).copy()
+        coeff_view = coeff_view.rename(columns={"feature": "特征" if lang == "zh" else "Feature", "coefficient": "系数" if lang == "zh" else "Coefficient", "abs_coefficient": "|系数|" if lang == "zh" else "|Coefficient|", "odds_ratio": "优势比" if lang == "zh" else "Odds ratio", "direction": "方向" if lang == "zh" else "Direction", "feature_type": "特征类型" if lang == "zh" else "Feature type", "reference_category": "参考类别" if lang == "zh" else "Reference category", "sample_support": "样本支持" if lang == "zh" else "Sample support", "reference_support": "参考支持" if lang == "zh" else "Reference support", "support_threshold": "支持阈值" if lang == "zh" else "Support threshold", "low_support_warning": "低支持警示" if lang == "zh" else "Low-support warning"})
+        type_column = "特征类型" if lang == "zh" else "Feature type"
+        if type_column in coeff_view:
+            coeff_view[type_column] = coeff_view[type_column].replace({"categorical": "分类" if lang == "zh" else "Categorical", "numeric": "数值" if lang == "zh" else "Numeric"})
+        for column in [c for c in coeff_view.columns if str(c) in {"方向", "Direction"}]:
+            coeff_view[column] = coeff_view[column].replace({"higher_odds": "更高 odds" if lang == "zh" else "Higher odds", "lower_odds": "更低 odds" if lang == "zh" else "Lower odds", "higher odds": "更高 odds" if lang == "zh" else "Higher odds", "lower odds": "更低 odds" if lang == "zh" else "Lower odds"})
+        st.dataframe(coeff_view, use_container_width=True, hide_index=True)
+        st.caption("低样本支持的系数不稳定，应结合 reference 和支持量谨慎阅读。" if lang == "zh" else "Coefficients with low sample support are unstable; read them with their reference and support counts.")
+    if isinstance(report, dict):
+        st.caption(("课程轨迹评估产物按报告记录的 Subject+Number 自适应历史规则读取；页面不在浏览器中重新训练。" if lang == "zh" else "Trajectory evaluation uses the report's adaptive Subject+Number history rule; the browser does not retrain models."))
+
+
+def render_schedule_questions(lang: str) -> None:
+    rows = [
+        ["冲突权重最高的课程组合" if lang == "zh" else "Course pairs with the highest conflict weight", t("cannot_answer", lang), "缺少 section meeting day/start/end 时间字段；路径：取得合法课表后构建课程-时段冲突图。" if lang == "zh" else "Missing section meeting day/start/end; path: obtain licensed schedule data and build a course-slot conflict graph."],
+        ["高需求课程最拥挤的时间段" if lang == "zh" else "Most crowded time slots for high-volume courses", t("cannot_answer", lang), "缺少 section 时间与容量；路径：合并可复现时段、容量和 waitlist 快照。" if lang == "zh" else "Missing section times and capacity; path: join reproducible time, capacity, and waitlist snapshots."],
+        ["核心课冲突最集中的院系" if lang == "zh" else "Department with the most core-course conflicts", t("cannot_answer", lang), "缺少冲突图与 core-course 标识；路径：补充课程目录/培养方案并验证课程键。" if lang == "zh" else "Missing conflict graph and core-course flag; path: add catalogue/curriculum labels and validate course keys."],
+        ["只能进入低需求时间段的课程" if lang == "zh" else "Courses confined to low-volume time slots", t("cannot_answer", lang), "缺少课程可行时间槽与实际安排变化；路径：保存多学期 section 快照后比较。" if lang == "zh" else "Missing feasible slots and schedule changes; path: retain multi-term section snapshots and compare them."],
+        ["改时间后后续学生数/需求变化" if lang == "zh" else "Subsequent student/volume change after a time change", t("cannot_answer", lang), "缺少 section 安排变更历史与可比后续观测；路径：使用事件级或课程-学期面板并仅报告关联。" if lang == "zh" else "Missing schedule-change history and comparable follow-up observations; path: use event-level or course-term panels and report associations only."],
+    ]
+    st.dataframe(pd.DataFrame(rows, columns=["问题" if lang == "zh" else "Question", "结论" if lang == "zh" else "Conclusion", "缺失字段与可行路径" if lang == "zh" else "Missing fields and practical path"]), use_container_width=True, hide_index=True)
+
+
+def render_legacy_prediction(lang: str, label: dict, threshold: object, operator: str, model_report: dict, holdout_metrics: pd.DataFrame, predictions: pd.DataFrame, top_n: int) -> None:
+    """Render the original three-year experiment only when trajectory outputs are absent."""
+    a, b, c, d = st.columns(4)
+    a.metric(t("training_rows", lang), fmt_int(label.get("training_valid_proxy_rows")))
+    b.metric(t("training_positive", lang), fmt_int(label.get("training_positive_count")))
+    c.metric(t("holdout_rows", lang), fmt_int(label.get("holdout_valid_proxy_rows")))
+    d.metric(t("holdout_positive", lang), fmt_int(label.get("holdout_positive_count")))
+    if threshold is not None:
+        st.write(t("label_rule", lang, q=float(label.get("quantile", .75)) * 100, threshold=f"{float(threshold):.4f}", operator=operator, train=model_report.get("train_years", "—"), holdout=model_report.get("holdout_year", "—")))
+    st.markdown(t("prediction_explain", lang))
+    st.markdown(t("confusion_explain", lang))
+    chart_metrics = holdout_metrics.loc[holdout_metrics["model"] != "majority_baseline", [c for c in ["model", "pr_auc", "roc_auc", "f1", "recall", "recall_at_k"] if c in holdout_metrics]].melt(id_vars="model", var_name="metric", value_name="value") if not holdout_metrics.empty else pd.DataFrame()
+    if not chart_metrics.empty:
+        chart_metrics["model"] = chart_metrics["model"].map(lambda x: model_label(x, lang))
+        chart_metrics["metric"] = chart_metrics["metric"].replace({"pr_auc": "AP", "recall_at_k": "Recall@20%"})
+        fig = px.bar(chart_metrics, x="metric", y="value", color="model", barmode="group", text_auto=".3f", labels={"metric": "指标" if lang == "zh" else "Metric", "value": "分数" if lang == "zh" else "Score", "model": "模型" if lang == "zh" else "Model"})
+        fig.update_yaxes(range=[0, 1])
+        st.plotly_chart(fig, use_container_width=True)
+    if not holdout_metrics.empty:
+        show = holdout_metrics[[c for c in ["model", "status", "rows", "positive_count", "negative_count", "pr_auc", "roc_auc", "f1", "precision", "recall", "balanced_accuracy", "brier_score", "recall_at_k", "tn", "fp", "fn", "tp"] if c in holdout_metrics]].copy()
+        show["model"] = show["model"].map(lambda x: model_label(x, lang))
+        show = show.rename(columns=translated_model_columns(lang))
+        st.dataframe(show, use_container_width=True, hide_index=True)
+    if not predictions.empty and "model" in predictions:
+        fitted = [m for m in ["random_forest", "logistic_regression"] if m in predictions["model"].unique()]
+        if fitted:
+            default = "random_forest" if "random_forest" in fitted else fitted[0]
+            picked = st.selectbox("查看模型预测排序" if lang == "zh" else "View model prediction ranking", fitted, index=fitted.index(default), format_func=lambda x: model_label(x, lang))
+            pred = predictions.loc[(predictions["split"] == "holdout") & (predictions["model"] == picked)].sort_values("predicted_probability", ascending=False).head(top_n).copy()
+            st.subheader(t("prediction_ranking", lang, n=top_n))
+            if "Term" in pred:
+                pred["Term"] = pred["Term"].map(lambda x: term_label(x, lang))
+            st.dataframe(pred, use_container_width=True, hide_index=True)
+    importance_path = PROCESSED / "phase6_feature_importance.csv"
+    if importance_path.exists():
+        importance = load_csv("phase6_feature_importance.csv")
+        if not importance.empty and "model" in importance:
+            models = sorted(importance["model"].dropna().unique().tolist())
+            picked = st.selectbox("查看特征重要性" if lang == "zh" else "View feature importance", models, format_func=lambda x: model_label(x, lang), key="importance_model")
+            imp = importance.loc[importance["model"] == picked].nlargest(top_n, "importance").sort_values("importance")
+            if not imp.empty:
+                fig = px.bar(imp, x="importance", y="feature", orientation="h", color="direction" if picked == "logistic_regression" and "direction" in imp else None, labels={"importance": "重要性 / 系数绝对值" if lang == "zh" else "Importance / absolute coefficient", "feature": "编码后特征" if lang == "zh" else "Encoded feature", "direction": "系数方向" if lang == "zh" else "Coefficient direction"})
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(t("feature_importance", lang, n=top_n))
+                if picked == "logistic_regression":
+                    st.markdown(t("logistic_explain", lang))
+
+
+def main() -> None:
+    # Keep this assertion close to the selector: adding a language must update every key.
+    if not keys_match():
+        st.error("语言资源不完整，请检查翻译词汇。" if st.session_state.get("lang", "zh") == "zh" else "A translation key is incomplete.")
+        st.stop()
+    lang = st.sidebar.selectbox(t("language", "zh"), list(LANGUAGES.values()), format_func=lambda x: "中文" if x == "zh" else "English", key="lang")
+    st.title("📘 " + t("page_title", lang))
+    st.caption(t("subtitle", lang))
+    required = ["course_term_demand_metrics.csv", "course_demand_summary.csv", "phase5_report.json", "phase6_model_metrics.csv", "phase6_predictions.csv", "phase6_course_profiles.csv", "phase6_report.json"]
     missing = [name for name in required if not (PROCESSED / name).exists()]
     if missing:
-        st.error("缺少分析输出，当前看板无法加载。")
-        st.info("请先运行项目分析脚本生成数据产物，再重新打开看板。")
+        st.error(t("data_unavailable", lang))
         st.stop()
-
     course_terms = load_csv("course_term_demand_metrics.csv")
     course_summary = load_csv("course_demand_summary.csv")
     demand_report = load_json("phase5_report.json")
@@ -194,231 +478,175 @@ def main() -> None:
     model_metrics = load_csv("phase6_model_metrics.csv")
     predictions = load_csv("phase6_predictions.csv")
     profiles = load_csv("phase6_course_profiles.csv")
-    analysis_window = [int(year) for year in model_report.get("window", [2021, 2022, 2023])]
-    course_terms = course_terms.loc[
-        course_terms["Year"].isin(analysis_window) & course_terms["Term"].isin(["spring", "fall"])
-    ].copy()
-    course_summary = course_summary.merge(
-        course_terms[["Subject", "Number", "Course Title"]].drop_duplicates(),
-        on=["Subject", "Number", "Course Title"],
-        how="inner",
-        validate="many_to_one",
-    )
-
-    st.sidebar.header("筛选器")
+    analysis_window = [int(year) for year in model_report.get("window", sorted(course_terms["Year"].dropna().unique())[:3])]
+    course_terms = course_terms.loc[course_terms["Year"].isin(analysis_window) & course_terms["Term"].astype(str).str.lower().isin(["spring", "fall"])].copy()
+    course_summary = course_summary.merge(course_terms[["Subject", "Number", "Course Title"]].drop_duplicates(), on=["Subject", "Number", "Course Title"], how="inner", validate="many_to_one")
+    st.sidebar.header(t("filter", lang))
     years = sorted(course_terms["Year"].dropna().astype(int).unique().tolist())
-    selected_years = st.sidebar.multiselect("年份", years, default=years)
-    selected_terms = st.sidebar.multiselect("学期", ["spring", "fall"], default=["spring", "fall"])
+    selected_years = st.sidebar.multiselect(t("years", lang), years, default=years)
+    selected_terms = st.sidebar.multiselect(t("terms", lang), ["spring", "fall"], default=["spring", "fall"], format_func=lambda x: term_label(x, lang))
     subjects = sorted(course_terms["Subject"].dropna().astype(str).unique().tolist())
-    selected_subjects = st.sidebar.multiselect("院系/Subject（可选）", subjects)
-    top_n = st.sidebar.slider("图表显示前 N 名", 5, 25, 10)
-    st.sidebar.caption("年份、学期和院系筛选作用于数据图表与榜单；模型指标和预测不在看板内重新训练。")
-    st.sidebar.caption("Top-N 只作用于总览需求榜、需求榜、W 代理榜、预测排序和特征重要性榜。")
-
-    filtered = course_terms.loc[course_terms["Year"].isin(selected_years) & course_terms["Term"].isin(selected_terms)].copy()
+    selected_subjects = st.sidebar.multiselect(t("subjects", lang), subjects)
+    top_n = st.sidebar.slider(t("top_n", lang), 5, 25, 10)
+    st.sidebar.caption(t("filter_note", lang))
+    st.sidebar.caption(t("top_note", lang))
+    filtered = course_terms.loc[course_terms["Year"].isin(selected_years) & course_terms["Term"].astype(str).str.lower().isin(selected_terms)].copy()
     if selected_subjects:
         filtered = filtered.loc[filtered["Subject"].isin(selected_subjects)].copy()
-    filtered_course_summary = aggregate_course_demand(filtered)
-    holdout_metrics = model_metrics.loc[model_metrics["split"] == "holdout"].copy()
-    threshold = model_report.get("label", {}).get("threshold")
-    threshold_operator = model_report.get("label", {}).get("operator", ">=")
-    rf_pr = metric_value(model_metrics, "random_forest", "pr_auc")
-    lr_pr = metric_value(model_metrics, "logistic_regression", "pr_auc")
-
+    if "w_mark_share" not in filtered.columns and "W_proxy" in filtered.columns:
+        filtered["w_mark_share"] = filtered["W_proxy"]
+    filtered_summary = aggregate_course_demand(filtered)
+    holdout_metrics = model_metrics.loc[model_metrics["split"] == "holdout"].copy() if "split" in model_metrics else model_metrics
+    label = model_report.get("label", {})
+    threshold = label.get("threshold")
+    operator = label.get("operator", ">=")
+    trajectory_outputs = load_trajectory_outputs()
+    continuity = load_trajectory_continuity()
+    if trajectory_outputs is not None:
+        trajectory_metrics = trajectory_outputs[0]
+        trajectory_rf = trajectory_metrics.loc[(trajectory_metrics.get("model") == "random_forest") & (trajectory_metrics.get("scope", "all") == "all") & (trajectory_metrics.get("split") == "holdout")]
+        rf_pr = None if trajectory_rf.empty else trajectory_rf.iloc[0].get("average_precision_ap")
+    else:
+        rf_pr = metric_value(model_metrics, "random_forest", "pr_auc")
     kpi = st.columns(6)
-    kpi[0].metric("筛选后课程-学期行", fmt_int(len(filtered)))
-    kpi[1].metric("筛选后课程键", fmt_int(filtered[["Subject", "Number", "Course Title"]].drop_duplicates().shape[0]))
-    kpi[2].metric("筛选后 Students", fmt_int(filtered["Students"].sum()))
-    kpi[3].metric("筛选后 W", fmt_int(filtered["W"].sum()))
-    threshold_text = "—" if threshold is None or pd.isna(threshold) else f"{threshold_operator} {float(threshold):.4f}"
-    kpi[4].metric("风险标签阈值", threshold_text)
-    kpi[5].metric("RF holdout PR-AUC", fmt_pct(rf_pr, 1))
-
-    if threshold_operator == ">":
-        st.warning("训练期 W 代理的第 75 百分位为 0，因大量 0 值并列，标签采用严格 W 代理 > 0；这样才能保留正类与负类。")
-    st.info("本看板使用公开的课程-学期聚合成绩分布，展示需求代理与 W 代理的描述性关联。它不代表官方退课率、注册事件、出勤或因果留存效果。")
-    render_dashboard_guide(top_n, rf_pr, model_report.get("profile", {}))
-
-    tabs = st.tabs(["总览", "需求与 W 代理", "预测风险", "课程画像", "数据与限制"])
-
+    kpi[0].metric(t("rows", lang), fmt_int(len(filtered)))
+    kpi[1].metric(t("course_keys", lang), fmt_int(filtered[["Subject", "Number"]].drop_duplicates().shape[0]))
+    kpi[2].metric(t("students", lang), fmt_int(filtered["Students"].sum()))
+    kpi[3].metric(t("w_count", lang), fmt_int(filtered["W"].sum()))
+    threshold_display = "W > 0" if trajectory_outputs is not None else ("—" if threshold is None or pd.isna(threshold) else f"{operator} {float(threshold):.4f}")
+    kpi[4].metric(t("threshold", lang), threshold_display)
+    kpi[5].metric(t("rf_ap", lang), fmt_score(rf_pr))
+    if trajectory_outputs is None and operator == ">":
+        st.warning(t("tie_warning", lang))
+    st.info(("本看板使用公开 UIUC GPA 课程-学期聚合：W 是 Withdraw 正式标记计数，Students 是期末 A+–F 成绩记录数（不含 W）；demand_proxy=Students+W 是观测规模，w_mark_share=W/(Students+W) 是派生占比。它们不能替代注册事件、独立学生数、出勤或因果效果。" if lang == "zh" else "This dashboard uses public UIUC GPA course-term aggregates: W is the count of formal Withdraw marks, Students is the final A+–F grade-record count excluding W, demand_proxy=Students+W is observed volume, and w_mark_share=W/(Students+W) is a derived share. They are not registration events, unique students, attendance, or causal effects."))
+    st.caption(t("primary_window_note", lang))
+    render_dashboard_guide(lang, top_n, model_report.get("profile", {}))
+    tabs = st.tabs([t("overview", lang), t("demand", lang), t("prediction", lang), t("profiles", lang), t("data_limits", lang)])
     with tabs[0]:
-        st.subheader("当前数据窗口")
+        st.subheader(t("window", lang))
         coverage = filtered.groupby(["Year", "Term"], as_index=False).size().rename(columns={"size": "course_term_rows"})
         if not coverage.empty:
-            fig = px.bar(coverage, x="Year", y="course_term_rows", color="Term", barmode="group", text_auto=True, labels={"Year": "年份", "course_term_rows": "课程-学期行", "Term": "学期"})
+            coverage["Term"] = coverage["Term"].map(lambda x: term_label(x, lang))
+            fig = px.bar(coverage, x="Year", y="course_term_rows", color="Term", barmode="group", text_auto=True, labels={"Year": t("year", lang), "course_term_rows": t("rows", lang), "Term": t("term", lang)})
             fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), legend_title_text="")
             st.plotly_chart(fig, use_container_width=True)
         left, right = st.columns(2)
         with left:
-            st.subheader(f"当前筛选范围内需求代理前 {top_n} 名")
-            top = filtered_course_summary.nlargest(top_n, "demand_proxy_total").copy()
+            st.subheader(t("top_courses", lang, n=top_n))
+            top = filtered_summary.nlargest(top_n, "demand_proxy_total").copy()
             if top.empty:
-                st.info("当前筛选没有可用于排名的课程。")
+                st.info(t("no_rank", lang))
             else:
                 top["course"] = course_label(top)
-                fig = px.bar(top.sort_values("demand_proxy_total"), x="demand_proxy_total", y="course", orientation="h", labels={"demand_proxy_total": "需求代理合计", "course": "课程"}, text_auto=".0f")
+                fig = px.bar(top.sort_values("demand_proxy_total"), x="demand_proxy_total", y="course", orientation="h", labels={"demand_proxy_total": t("demand_total", lang), "course": t("course", lang)}, text_auto=".0f")
                 fig.update_layout(height=430, margin=dict(l=10, r=20, t=20, b=20))
                 st.plotly_chart(fig, use_container_width=True)
-            st.caption("需求代理合计 = 当前筛选范围内各课程-学期的 Students + W 之和；榜单受左侧筛选和 Top-N 共同控制。")
+            st.caption(t("demand_sum_caption", lang))
         with right:
-            st.subheader("留出集指标")
-            show = holdout_metrics[["model", "pr_auc", "roc_auc", "f1", "precision", "recall", "balanced_accuracy", "recall_at_k"]].copy()
-            show.columns = ["模型", "PR-AUC", "ROC-AUC", "F1", "Precision", "Recall", "Balanced accuracy", "Recall@K"]
-            for col in show.columns[1:]:
-                show[col] = show[col].map(lambda x: "—" if pd.isna(x) else f"{float(x):.3f}")
+            overview_source = trajectory_outputs[0] if trajectory_outputs is not None else holdout_metrics
+            if trajectory_outputs is not None:
+                overview_source = overview_source.loc[(overview_source["split"] == "holdout") & (overview_source["scope"] == "all")].copy()
+                st.subheader(t("trajectory_overview_metrics", lang))
+                cols = [c for c in ["model", "average_precision_ap", "roc_auc", "f1", "precision", "recall", "balanced_accuracy", "recall_at_20pct"] if c in overview_source.columns]
+                show = overview_source[cols].copy().rename(columns={"model": "模型" if lang == "zh" else "Model", "average_precision_ap": "AP", "roc_auc": "ROC-AUC", "recall_at_20pct": "Recall@20%"})
+            else:
+                st.subheader(t("legacy_overview_metrics", lang))
+                cols = [c for c in ["model", "pr_auc", "roc_auc", "f1", "precision", "recall", "balanced_accuracy", "recall_at_k"] if c in overview_source.columns]
+                show = overview_source[cols].copy().rename(columns={"model": "模型" if lang == "zh" else "Model", "pr_auc": "AP", "roc_auc": "ROC-AUC", "recall_at_k": "Recall@20%"})
+            if not show.empty:
+                show.iloc[:, 0] = show.iloc[:, 0].map(lambda x: model_label(x, lang))
+                for col in show.columns[1:]:
+                    show[col] = show[col].map(fmt_score)
             st.dataframe(show, use_container_width=True, hide_index=True)
-            st.caption("留出集为 2023；阈值、预处理和模型参数在分析前固定，筛选器不会重新训练模型。")
-
+            st.caption(t("trajectory_metrics_note" if trajectory_outputs is not None else "legacy_metrics_note", lang))
     with tabs[1]:
-        st.subheader("需求代理趋势与课程分布")
+        st.subheader(t("demand_trend", lang))
         if filtered.empty:
-            st.warning("当前筛选没有数据。")
+            st.warning(t("no_data", lang))
         else:
-            trend = filtered.groupby(["Year", "Term"], as_index=False).agg(demand_proxy=("demand_proxy", "sum"), w_proxy=("W_proxy", "mean"), course_terms=("Subject", "size"))
-            trend["year_term"] = trend["Year"].astype(str) + " " + trend["Term"]
-            fig = px.line(trend, x="year_term", y="demand_proxy", markers=True, color="Term", labels={"year_term": "年-学期", "demand_proxy": "需求代理总和", "Term": "学期"})
+            trend = filtered.groupby(["Year", "Term"], as_index=False).agg(demand_proxy=("demand_proxy", "sum"), w_mark_share=("w_mark_share", "mean"), course_terms=("Subject", "size"))
+            trend["Term_label"] = trend["Term"].map(lambda x: term_label(x, lang))
+            trend["year_term"] = trend["Year"].astype(str) + " " + trend["Term_label"]
+            fig = px.line(trend, x="year_term", y="demand_proxy", markers=True, color="Term_label", labels={"year_term": t("year_term", lang), "demand_proxy": t("demand_total", lang), "Term_label": t("term", lang)})
             fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig, use_container_width=True)
             left, right = st.columns(2)
             with left:
-                st.subheader(f"筛选范围内需求代理前 {top_n} 名")
-                top_rows = filtered.nlargest(top_n, "demand_proxy")[["Year", "Term", "Subject", "Number", "Course Title", "Students", "W", "demand_proxy", "W_proxy"]].copy()
+                st.subheader(t("top_courses", lang, n=top_n))
+                top_rows = filtered.nlargest(top_n, "demand_proxy")[["Year", "Term", "Subject", "Number", "Course Title", "Students", "W", "demand_proxy", "w_mark_share"]].copy()
+                top_rows["Term"] = top_rows["Term"].map(lambda x: term_label(x, lang))
                 st.dataframe(top_rows, use_container_width=True, hide_index=True)
-                st.caption("这里按课程-学期行排名；Top-N 只改变显示数量，不改变趋势图。")
+                st.caption(t("rank_course_term", lang))
             with right:
-                st.subheader("需求与 W proxy")
+                st.subheader(t("demand_w_scatter", lang))
                 scatter = filtered.sample(min(len(filtered), 5000), random_state=42) if len(filtered) > 5000 else filtered
-                fig = px.scatter(scatter, x="demand_proxy", y="W_proxy", color="Term", hover_data=["Year", "Subject", "Number", "Course Title"], labels={"demand_proxy": "需求代理 = Students + W", "W_proxy": "W proxy", "Term": "学期"}, opacity=0.55)
+                scatter = scatter.copy()
+                scatter["Term_label"] = scatter["Term"].map(lambda x: term_label(x, lang))
+                fig = px.scatter(scatter, x="demand_proxy", y="w_mark_share", color="Term_label", hover_data=["Year", "Subject", "Number", "Course Title", "W"], labels={"demand_proxy": t("observed_proxy_formula", lang), "w_mark_share": t("w_formula", lang), "Term_label": t("term", lang)}, opacity=0.55)
                 fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
                 st.plotly_chart(fig, use_container_width=True)
-            w_top = filtered.loc[filtered["demand_proxy"] >= 20].nlargest(top_n, "W_proxy")[["Year", "Term", "Subject", "Number", "Course Title", "demand_proxy", "W_proxy"]]
-            st.subheader(f"分母稳定性筛选后的 W 代理前 {top_n} 名")
+            w_top = filtered.loc[filtered["demand_proxy"] >= 20].nlargest(top_n, "w_mark_share")[["Year", "Term", "Subject", "Number", "Course Title", "W", "demand_proxy", "w_mark_share"]].copy()
+            w_top["Term"] = w_top["Term"].map(lambda x: term_label(x, lang))
+            st.subheader(t("stable_w_top", lang, n=top_n))
             st.dataframe(w_top, use_container_width=True, hide_index=True)
-            st.caption("仅保留需求代理 ≥ 20 的课程-学期行，以减少小分母导致的极端比例；Top-N 只改变显示数量。")
-
+            st.caption(t("stable_w_note", lang))
     with tabs[2]:
-        st.subheader("时间感知高 W 代理风险筛查")
-        label = model_report.get("label", {})
-        a, b, c, d = st.columns(4)
-        a.metric("训练行", fmt_int(label.get("training_valid_proxy_rows")))
-        b.metric("训练正类", fmt_int(label.get("training_positive_count")))
-        c.metric("留出行", fmt_int(label.get("holdout_valid_proxy_rows")))
-        d.metric("留出正类", fmt_int(label.get("holdout_positive_count")))
-        st.write(f"标签规则：训练期 W 代理第 {float(label.get('quantile', .75)) * 100:.0f} 百分位为 `{float(threshold):.4f}`，实际使用 `{threshold_operator}`；训练年份为 {model_report.get('train_years')}，留出年为 {model_report.get('holdout_year')}。")
-        chart_metrics = holdout_metrics.loc[holdout_metrics["model"] != "majority_baseline", ["model", "pr_auc", "roc_auc", "f1", "recall", "recall_at_k"]].melt(id_vars="model", var_name="metric", value_name="value")
-        if not chart_metrics.empty:
-            fig = px.bar(chart_metrics, x="metric", y="value", color="model", barmode="group", text_auto=".3f", labels={"metric": "指标", "value": "分数", "model": "模型"})
-            fig.update_yaxes(range=[0, 1])
-            fig.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-            st.plotly_chart(fig, use_container_width=True)
-        show = holdout_metrics[["model", "status", "rows", "positive_count", "negative_count", "pr_auc", "roc_auc", "f1", "precision", "recall", "balanced_accuracy", "brier_score", "recall_at_k", "tn", "fp", "fn", "tp"]].copy()
-        st.dataframe(show, use_container_width=True, hide_index=True)
-        st.caption("PR-AUC 比 accuracy 更适合这个不平衡标签；Logistic Regression 用于解释方向，Random Forest 用于比较非线性排序表现。")
-
-        if not predictions.empty:
-            fitted = [m for m in ["random_forest", "logistic_regression"] if m in predictions["model"].unique()]
-            default_model = "random_forest" if "random_forest" in fitted else (fitted[0] if fitted else None)
-            if default_model:
-                model_pick = st.selectbox("查看预测排序", fitted, index=fitted.index(default_model))
-                pred = predictions.loc[(predictions["split"] == "holdout") & (predictions["model"] == model_pick)].copy()
-                pred = pred.sort_values("predicted_probability", ascending=False).head(top_n)
-                st.subheader(f"{model_pick}：2023 留出集预测概率最高课程")
-                st.dataframe(pred[["Year", "Term", "Subject", "Number", "Course Title", "actual_high_w_risk", "predicted_probability", "predicted_high_w_risk", "W_proxy"]], use_container_width=True, hide_index=True)
-
-        importance_path = PROCESSED / "phase6_feature_importance.csv"
-        if importance_path.exists():
-            importance = load_csv("phase6_feature_importance.csv")
-            importance_models = sorted(importance["model"].dropna().unique().tolist())
-            if importance_models:
-                model_pick = st.selectbox("查看特征重要性", importance_models, key="importance_model")
-                imp = importance.loc[importance["model"] == model_pick].nlargest(top_n, "importance").sort_values("importance")
-                if not imp.empty:
-                    fig = px.bar(imp, x="importance", y="feature", orientation="h", color="direction" if model_pick == "logistic_regression" else None, labels={"importance": "重要性/系数绝对值", "feature": "编码后特征", "direction": "Logistic 系数方向"})
-                    fig.update_layout(height=500, margin=dict(l=10, r=20, t=20, b=20))
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.caption(f"特征重要性图显示当前模型的前 {top_n} 个特征；Top-N 只改变显示数量，不改变模型。")
-            else:
-                st.info("没有可用的模型特征重要性（例如训练目标只有一个类别）。")
-
+        st.subheader(t("prediction_title", lang))
+        trajectory = load_trajectory_outputs()
+        if trajectory is not None:
+            render_trajectory(lang, trajectory, top_n, continuity)
+        else:
+            render_legacy_prediction(lang, label, threshold, operator, model_report, holdout_metrics, predictions, top_n)
     with tabs[3]:
-        st.subheader("K-Means 课程画像（仅描述相似性）")
+        st.subheader(t("profiles_title", lang))
         profile_meta = model_report.get("profile", {})
+        st.markdown(t("profile_explain", lang))
         if profile_meta.get("status") != "ok":
-            st.warning(f"画像未启用：{profile_meta.get('reason', '未提供原因')}")
+            st.warning(("画像未启用：" + str(profile_meta.get("reason", "未提供原因"))) if lang == "zh" else ("Profiles unavailable: " + str(profile_meta.get("reason", "no reason provided"))))
         else:
             p1, p2, p3 = st.columns(3)
-            p1.metric("聚类数 K", fmt_int(profile_meta.get("best_k")))
-            p2.metric("Silhouette", f"{float(profile_meta.get('silhouette', 0)):.3f}")
-            p3.metric("训练课程键", fmt_int(profile_meta.get("train_course_rows")))
-            cluster_size = profiles.groupby("cluster", as_index=False).agg(course_count=("Subject", "size"))
-            fig = px.bar(cluster_size, x="cluster", y="course_count", text_auto=True, labels={"cluster": "画像簇", "course_count": "课程键数"})
-            fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
-            st.plotly_chart(fig, use_container_width=True)
-            centers = pd.DataFrame(profile_meta.get("cluster_centers", []))
-            if not centers.empty and "cluster" in centers:
-                centers = centers.copy()
-                centers["画像含义"] = centers.apply(
-                    lambda row: "相对较小规模课程：训练期 Students / 历史需求代理均较低"
-                    if float(row.get("Students", 0)) < float(centers["Students"].median())
-                    else "相对较大规模课程：训练期 Students / 历史需求代理均较高",
-                    axis=1,
-                )
-                center_view = centers[["cluster", "画像含义", "Students", "historical_demand_proxy_mean", "W_proxy", "historical_w_proxy_mean"]].copy()
-                center_view.columns = ["画像簇", "画像含义", "典型 Students", "历史需求代理均值", "当期 W 代理", "历史 W 代理均值"]
-                st.dataframe(center_view, use_container_width=True, hide_index=True)
-                st.caption("当前 K=2 的主要差异是规模与历史观测量：画像簇 0 约有 2,784 个课程键，画像簇 1 约有 111 个课程键。两类的 W 代理中心相近，不能据此说某一类更容易退课。")
-            with st.expander("为什么使用 K-Means，而不是其他无监督方法？"):
-                st.markdown(
-                    "K-Means 适合本项目的第一版课程画像：它对标准化后的数值特征运行快、实现简单，"
-                    "并且可以用聚类中心解释每类课程的典型规模、成绩结构和历史代理水平。这里的目标是发现相似观察，不是预测原因。"
-                )
-                st.markdown(
-                    "当前不优先使用层次聚类、DBSCAN 或高维文本聚类：层次聚类在课程数量扩大后更难维护，"
-                    "DBSCAN 对密度和参数敏感且会产生噪声点，而评论文本数据尚未合法、稳定接入。若未来出现明显非球形结构、"
-                    "大量异常点或文本特征，应再用这些方法做稳定性对照，而不是直接替换当前画像。"
-                )
-            chosen_cluster = st.selectbox("查看画像簇", sorted(profiles["cluster"].unique().tolist()))
-            st.dataframe(profiles.loc[profiles["cluster"] == chosen_cluster].head(100), use_container_width=True, hide_index=True)
-            st.caption("聚类特征来自训练期课程汇总，包含成绩结构、课程规模、历史需求和 W 代理；它只描述相似性，不能解释退课原因，也不是因果分组。")
-
+            p1.metric("聚类数 K" if lang == "zh" else "Number of clusters K", fmt_int(profile_meta.get("best_k")))
+            p2.metric(t("silhouette", lang), fmt_score(profile_meta.get("silhouette")))
+            p3.metric(t("profile_courses", lang), fmt_int(profile_meta.get("train_course_rows")))
+            if not profiles.empty and "cluster" in profiles:
+                cluster_size = profiles.groupby("cluster", as_index=False).agg(course_count=("Subject", "size"))
+                fig = px.bar(cluster_size, x="cluster", y="course_count", text_auto=True, labels={"cluster": t("cluster", lang), "course_count": t("course_keys", lang)})
+                st.plotly_chart(fig, use_container_width=True)
+                centers = pd.DataFrame(profile_meta.get("cluster_centers", []))
+                if not centers.empty and "cluster" in centers:
+                    st.dataframe(centers, use_container_width=True, hide_index=True)
+                choices = sorted(profiles["cluster"].dropna().unique().tolist())
+                chosen = st.selectbox("查看画像簇" if lang == "zh" else "View profile cluster", choices)
+                st.dataframe(profiles.loc[profiles["cluster"] == chosen].head(100), use_container_width=True, hide_index=True)
+                st.caption(t("profile_similarity_note", lang))
     with tabs[4]:
-        st.subheader("数据口径、来源与不能回答的问题")
-        render_field_table()
-        render_data_inventory()
-        st.markdown("### 数据来源")
-        st.markdown("- GPA 数据：公开 UIUC GPA 数据集；源粒度为课程-学期-教师成绩分布，本看板聚合到课程-学期。")
-        st.markdown("- Course Explorer：六次 2021–2023 请求被 WAF challenge 阻断，因此没有 section 课表。")
-        st.markdown("- 评论/ICES：无合法、可识别课程且带时间标签的文本，评论情感分析未启用。")
-        st.markdown("### 右上角 Deploy 是什么？")
-        st.write("Deploy 是 Streamlit 宿主界面提供的发布入口。当前项目本身仍是本地运行：点击它不会把文件自动部署到你的电脑，也不会替看板创建服务器。若选择 Community Cloud，需要把仓库和依赖交给云端运行；选择其他平台则需要自行准备运行环境、访问控制和成本预算。")
-        st.markdown("### 未来拓展与价值")
-        st.write("从单校扩展到多校有意义：高校管理者、课程负责人、教务规划团队和教育研究者都可能需要跨学期比较课程需求、风险代理和数据质量。但跨校比较前必须统一课程身份、学期定义、成绩口径、隐私授权和数据许可；更稳妥的路径是先接入少量数据字典清晰、许可明确的高校，保留校内结果与跨校结果的分层展示，避免把不同学校的代理值直接横比。")
-        st.markdown("### 五个排课问题的当前状态")
-        scheduling = pd.DataFrame(
-            [
-                ["冲突权重最高的课程组合", "不能回答", "缺少可复现的 section meeting day/start/end 时间字段"],
-                ["高需求课程最拥挤的时间段", "不能回答", "缺少 section 时间与容量；本看板的 year/term 不是时段"],
-                ["核心课冲突最集中的院系", "不能回答", "缺少 section 冲突图与 core-course 标识"],
-                ["只能进入低需求时间段的课程", "不能回答", "缺少课程可行时间槽与实际安排变化"],
-                ["改时间后后续学生数/需求变化", "不能回答", "缺少 section 安排变更历史与可比后续需求观测"],
-            ],
-            columns=["问题", "结论", "证据/缺失字段"],
-        )
-        st.dataframe(scheduling, use_container_width=True, hide_index=True)
-        st.markdown("### 当前不足的解决路径")
-        resolution = pd.DataFrame(
-            [
-                ["没有出勤/参与人数", "无法从 GPA 表补出；需要学校授权的 LMS/attendance 或公开汇总。", "在获得前，用课程-学期规模、W 代理和历史成绩结构做需求筛查，并明确这是代理。"],
-                ["没有 section 时间、容量和 waitlist", "优先使用合法公开课表接口、学期快照或教务导出，并先做键与基数校验。", "暂时只回答课程级需求分布，不把年/学期当作上课时段。"],
-                ["W 代理不是官方退课率", "若取得注册/退课事件，可建立事件级分母和时间窗。", "继续使用 W 代理，但把结论限定为描述性关联和复核优先级。"],
-                ["模型留出年只有一个年份", "未来累积更多年份后做滚动时间验证。", "当前只把结果作为 2023 的时间留出筛查，不声称部署保证。"],
-                ["K-Means 受特征尺度和 K 影响", "增加稳定性、替代算法和跨年份复核。", "当前报告聚类中心、规模和轮廓系数，不把簇当成因果类别。"],
-            ],
-            columns=["不足", "直接解决渠道", "当前可行的替代方案"],
-        )
-        st.dataframe(resolution, use_container_width=True, hide_index=True)
-        st.markdown("### 复现")
-        st.code("1. 运行仓库中的需求与数据分析脚本\n2. 运行仓库中的风险筛查脚本\n3. .\\.venv\\Scripts\\python.exe -m streamlit run dashboard\\app.py", language="text")
+        st.subheader(t("data_boundaries", lang))
+        st.markdown(t("field_title", lang))
+        render_field_table(lang, analysis_window)
+        st.markdown(t("inventory_title", lang))
+        render_inventory(lang)
+        st.markdown("### " + t("source_title", lang))
+        st.markdown("- GPA：公开 UIUC GPA 成绩分布数据，源粒度为课程-学期-教师成绩分布，本看板聚合到课程-学期；W 是 Withdraw 标记计数，grade_point_mean 是由 A+–F 计数换算的估算平均绩点。" if lang == "zh" else "- GPA: public UIUC GPA grade-distribution data; source grain is course-term-instructor grade distribution, aggregated here to course-term. W is a Withdraw-mark count and grade_point_mean is an estimated mean from A+–F counts.")
+        st.markdown("- " + t("instructor_limit_note", lang))
+        st.markdown("- 课程安排：当前没有可复现的 section 时间、容量或 waitlist 字段；因此不展示具体冲突值。" if lang == "zh" else "- Scheduling: no reproducible section times, capacity, or waitlist fields are available; no specific conflict values are shown.")
+        st.markdown("- 评论文本：没有合法且可匹配的带时间标签文本，情绪/主题结果未启用。" if lang == "zh" else "- Review text: no lawful, matchable time-labelled text is available, so sentiment/topics are not enabled.")
+        st.markdown("### " + t("schedule_title", lang))
+        render_schedule_questions(lang)
+        st.markdown("### " + t("resolution_title", lang))
+        st.write("优先补充合法的 section 时间、容量、waitlist、注册/退课事件和授权的 LMS 汇总；每次接入先验证课程键与 join 基数，再做滚动时间验证。" if lang == "zh" else "Prioritise licensed section times, capacity, waitlist, registration/withdrawal events, and authorised LMS aggregates; validate course keys and join cardinality before rolling time validation.")
+        st.markdown("### " + t("reproduce_title", lang))
+        reproduce = ("1. 生成标准化与指标表\n2. 生成模型和课程画像\n3. python -m streamlit run dashboard/app.py" if lang == "zh" else "1. Run the data-normalisation and metric scripts\n2. Run the model and course-profile scripts\n3. python -m streamlit run dashboard/app.py")
+        st.code(reproduce, language="text")
+        guide_name = "MODEL_AND_PROXY_GUIDE_ZH.md" if lang == "zh" else "MODEL_AND_PROXY_GUIDE_EN.md"
+        guide_path = ROOT / "docs" / guide_name
+        if guide_path.exists():
+            st.download_button(t("download_label", lang), guide_path.read_bytes(), file_name=guide_name, mime="text/markdown", help=t("download_guide", lang))
+        eda = load_trajectory_eda()
+        if eda:
+            st.markdown("### " + t("eda_title", lang))
+            st.caption(t("eda_note", lang))
+            eda_view = {key: eda.get(key) for key in ["filtered_rows", "filtered_columns", "reconciliation_all_zero", "pass_rate_or_gpa_available", "drop_semantics"] if key in eda}
+            st.json(eda_view)
 
 
 if __name__ == "__main__":

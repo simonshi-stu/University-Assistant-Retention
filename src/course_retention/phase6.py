@@ -356,7 +356,9 @@ def build_phase6_feature_table(
         "feature_columns": features,
         "numeric_feature_columns": numeric,
         "categorical_feature_columns": categorical,
-        "excluded_predictive_columns": sorted(LEAKAGE_COLUMNS | {"Subject", "Number", "Course Title"}),
+        # Subject is an intentionally used categorical feature; only Number
+        # and Course Title are excluded identity/display fields here.
+        "excluded_predictive_columns": sorted(LEAKAGE_COLUMNS | {"Number", "Course Title"}),
         "historical_features_are_strictly_prior_years": True,
         "historical_aggregation_level": "prior calendar-year means across the selected spring/fall terms; not prior-same-term history",
         "historical_feature_coverage": history_coverage,
@@ -694,7 +696,7 @@ def build_phase6_report(
         ],
         "limitations": [
             "The target is a W-based proxy label; it is not an official withdrawal/drop rate and cannot identify timing or reason.",
-            "Students is included as a current count excluding W; it is not registration-event volume or a unique-student count.",
+            "Current Students is retained for audit but excluded from predictive features; it is a count excluding W, not registration-event volume or a unique-student count.",
             "Historical W proxy and demand features are descriptive lag features from strictly earlier selected years; rows in the first selected year have missing history handled by train-fitted imputation.",
             "The source has no section id, student id, attendance, capacity or waitlist; this phase cannot answer scheduling-conflict questions.",
             "Model scores are temporal associations and screening performance, not causal retention effects or deployment guarantees.",

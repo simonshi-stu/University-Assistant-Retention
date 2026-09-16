@@ -31,7 +31,7 @@ Phase 6 使用 Phase 5 生成的 `course_term_demand_metrics.csv`，默认窗口
 - Logistic Regression 是主模型：数据量中等时稳定、快速、系数方向可解释，并使用 balanced class weight。
 - Random Forest 是非线性对照：检查潜在非线性与交互，但解释性较弱；固定随机种子，不用 holdout 调参。
 - majority baseline 使用训练期正类比例作为恒定概率。
-- 输出 PR-AUC、ROC-AUC、F1、precision、recall、balanced accuracy、Brier score、混淆矩阵，以及每个 split 前 20% 概率排序中的 Recall@K；报告中的 `recall_at_k_rows` 明确记录每个 split 的实际 K。类别缺失时指标保留空值并记录 `one_class`，程序不伪造分数。
+- 输出 AP（Average Precision）、ROC-AUC、F1、precision、recall、balanced accuracy、Brier score、混淆矩阵，以及每个 split 前 20% 概率排序中的 Recall@20%；报告中的 `recall_at_k_rows` 明确记录每个 split 的实际 K。AP 是排序指标，不是官方退课率；Brier 是概率校准误差，越低越好。类别缺失时指标保留空值并记录 `one_class`，程序不伪造分数。
 
 ## K-Means 课程画像
 
@@ -58,12 +58,12 @@ K-Means 只使用训练期课程汇总后的描述性数值特征，包含训练
 
 主窗口生成 8,973 行特征表：训练 5,933 行，2023 留出 3,040 行。训练期 W proxy 第 75 百分位是 0；为避免 `>= 0` 把训练集全部标成正类，实际标签规则为 `W_proxy > 0`，训练正类/负类为 1,152/4,781，留出正类/负类为 608/2,432。
 
-| 模型 | PR-AUC | ROC-AUC | F1 | Precision | Recall | Balanced accuracy | Brier | Recall@20% |
+| 模型 | AP | ROC-AUC | F1 | Precision | Recall | Balanced accuracy | Brier | Recall@20% |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Majority baseline | 0.2000 | 0.5000 | 0.0000 | 0.0000 | 0.0000 | 0.5000 | 0.1600 | 0.2319 |
 | Logistic Regression | 0.5029 | 0.7357 | 0.4154 | 0.2851 | 0.7648 | 0.6427 | 0.2742 | 0.4786 |
 | Random Forest | 0.5293 | 0.7538 | 0.4971 | 0.4505 | 0.5543 | 0.6926 | 0.1712 | 0.4836 |
 
-Random Forest 在留出集的排序、F1 和 balanced accuracy 上优于 Logistic Regression；Logistic Regression 的 recall 和 Brier score 更好。按项目策略，Logistic Regression 仍是解释性主模型，Random Forest 是非线性对照，不能因为单次 holdout 的差异就声称部署或因果收益。
+Random Forest 在该次留出集的排序、F1 和 balanced accuracy 上优于 Logistic Regression；Logistic Regression 的 recall 更高，而 Brier score 也更高（概率校准更差）。按项目策略，Logistic Regression 仍是解释性主模型，Random Forest 是非线性对照，不能因为单次 holdout 的差异就声称部署或因果收益。页面和后续报告使用 AP 这一名称，避免把 Average Precision 写成 PR-AUC。
 
 K-Means 在 2,895 个训练课程键上运行，选择 K=2，silhouette 为 0.4982，簇规模为 2,784 和 111。画像使用训练期 W proxy 均值等描述性字段，但与预测特征矩阵严格分离。

@@ -5,8 +5,8 @@ row describes one instructor's grade counts for a given course in a given term.
 There is no section id in the raw data, so downstream metrics are at the
 course-term grain, never at the section grain.
 
-W_proxy is strictly ``W / (Students + W)``. It is a course-term proxy, not an
-official withdrawal rate; missing inputs are not zero-filled.
+``w_mark_share`` is strictly ``W / (Students + W)``. It is a derived course-
+term share, not an official withdrawal rate; missing inputs are not zero-filled.
 """
 
 from __future__ import annotations
@@ -23,6 +23,12 @@ from .config import DATA_RAW_DIR, PRIMARY_TERMS, validate_window
 GRADE_COLUMNS = (
     "A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F",
 )
+GRADE_POINT_MAP = {
+    "A+": 4.0, "A": 4.0, "A-": 3.7,
+    "B+": 3.3, "B": 3.0, "B-": 2.7,
+    "C+": 2.3, "C": 2.0, "C-": 1.7,
+    "D+": 1.3, "D": 1.0, "D-": 0.7, "F": 0.0,
+}
 NUMERIC_COLUMNS = GRADE_COLUMNS + ("W", "Students")
 REQUIRED_COLUMNS = (
     "Year", "Term", "YearTerm", "Subject", "Number", "Course Title", "Sched Type",
@@ -124,6 +130,9 @@ def build_course_term_metrics(frame) -> pd.DataFrame:
     w_proxy = pd.Series(pd.NA, index=metrics.index, dtype="Float64")
     w_proxy.loc[valid] = w_sum.loc[valid] / denominator.loc[valid]
     metrics["W_proxy"] = w_proxy
+    metrics["w_mark_share"] = w_proxy
+    grade_points = sum(metrics[column] * GRADE_POINT_MAP[column] for column in GRADE_COLUMNS)
+    metrics["grade_point_mean"] = grade_points.div(metrics["grade_total"].where(metrics["grade_total"] > 0))
 
     for column in GRADE_COLUMNS:
         denominator = metrics["grade_total"]
@@ -133,7 +142,7 @@ def build_course_term_metrics(frame) -> pd.DataFrame:
         metrics[f"share_{column}"] = share
 
     ordered = list(GROUP_KEYS) + list(GRADE_COLUMNS) + [
-        "W", "Students", "W_proxy", "grade_total",
+        "W", "Students", "W_proxy", "w_mark_share", "grade_total", "grade_point_mean",
     ] + [f"share_{column}" for column in GRADE_COLUMNS]
     return metrics[ordered].reset_index(drop=True)
 
@@ -181,9 +190,10 @@ def build_quality_report(raw, filtered, metrics, window, terms) -> dict:
             "filter window and terms", "coerce numeric grade/W/Students columns",
             "aggregate course-term metrics",
         ],
-        "w_proxy_formula": "W_proxy = W / (Students + W), only when both sums are available and denominator > 0",
+        "w_mark_share_formula": "w_mark_share = W / (Students + W), only when both sums are available and denominator > 0",
+        "grade_point_mean_definition": "Estimated weighted mean from A+ through F counts on a 4.0-style scale; not an official GPA.",
         "no_section_id": True,
-        "limitations": ["source has no section id", "W_proxy is not an official withdrawal rate"],
+        "limitations": ["source has no section id", "w_mark_share is not an official withdrawal rate", "grade_point_mean is not an official GPA"],
     }
 
 

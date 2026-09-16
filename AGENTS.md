@@ -18,6 +18,15 @@ DeepSeek V4 Flash is the primary code and analysis executor. All generated imple
 
 DeepSeek must follow the fixed project phases and current phase input. It must not modify another repository, change the agreed data windows, invent unavailable fields, or describe an unverified output as complete.
 
+### User-authorized implementation exception (this follow-up only)
+
+For the explicit 2026-09 follow-up requesting the independent six-year
+course-trajectory extension, the user authorized the Luna implementation
+sub-agent to write primary code, scripts, tests, and generated artifacts
+inside this repository. Codex remains the supervisor/reviewer. This is a
+one-turn, user-scoped exception and does not change the default DeepSeek
+implementation role for future work.
+
 ### Codex supervisor and reviewer
 
 Codex is the supervising reviewer, not the primary feature-code author and not a task scheduler. Codex is responsible for:

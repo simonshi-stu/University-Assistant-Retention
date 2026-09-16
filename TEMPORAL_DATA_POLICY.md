@@ -14,6 +14,16 @@ This repository is being developed in 2026. Its historical analysis clock is set
 
 No 2026+ source data is allowed. A module that passes the primary sufficiency checks must remain on the primary window.
 
+## Independent six-year extension (user-approved 2026 work)
+
+The `extended_2024_backtest` is a separate 2026 development artifact, not a
+replacement for the accepted 2021–2023 primary analysis and not an ATLAS
+result. It filters the raw GPA source to 2019–2024 Spring/Fall only. Years
+2019–2021 initialize same-course/same-term lag history; 2022 and 2023 are
+training target years; 2024 Spring and Fall are the untouched holdout. A
+target row enters the model cohort only when its same-term lag1, lag2, and
+lag3 observations are all present.
+
 ## Sufficiency checks
 
 Window selection is evaluated separately for W proxy analysis, supervised modeling, schedule conflicts, and sentiment analysis. The minimum thresholds are defined in `PROJECT_SCOPE.md`. Every fallback decision must record source coverage, row counts after cleaning, missing critical fields, and the selected window in `HISTORY.md`.

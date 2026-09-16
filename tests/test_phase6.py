@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -115,5 +116,12 @@ def test_build_outputs_writes_expected_shapes(tmp_path):
 
 def test_dashboard_contains_machine_readable_schedule_limitations():
     dashboard = (PROJECT_ROOT / "dashboard" / "app.py").read_text(encoding="utf-8")
-    assert dashboard.count("不能回答") >= 5
-    assert "W proxy" in dashboard
+    i18n = (PROJECT_ROOT / "dashboard" / "i18n.py").read_text(encoding="utf-8")
+    assert '"cannot_answer"' in i18n
+    assert '"zh": "数据不足"' in i18n
+    assert '"en": "Insufficient data"' in i18n
+    tree = ast.parse(dashboard)
+    schedule = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "render_schedule_questions")
+    assert any(isinstance(node, ast.List) and len(node.elts) == 5 for node in ast.walk(schedule))
+    assert "W marks" in dashboard
+    assert "w_mark_share" in dashboard
