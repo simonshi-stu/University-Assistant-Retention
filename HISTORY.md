@@ -861,3 +861,43 @@ all-zero one-hot values by the documented `handle_unknown` policy.
   evidence trail only. It does not claim that Excel export, schedule-conflict
   analysis, course-review text analysis, or official GPA is complete. Older
   history records are retained without rewriting.
+
+## 2026-09-17 — Auditable Sol / DeepSeek / Luna workflow
+
+- Added a repository-local development state machine with unique task IDs,
+  explicit scope and acceptance criteria, one irrevocable DeepSeek attempt per
+  task, Luna review/correction records, and Sol's criterion-by-criterion final
+  decision. Rejected or failed work can continue only under a linked new task
+  ID; the original record is retained as superseded.
+- Added append-only hash-chained events, immutable stage artifacts, hashes for
+  Luna-reviewed files, path allowlists, secret redaction, offline configuration
+  checks, and a verification command. This tooling is isolated from the
+  deterministic analytics and dashboard runtime.
+- Recorded two pre-workflow DeepSeek calls as explicit bootstrap records. The
+  first returned empty final content and consumed its attempt. The second
+  returned a unified diff whose captured transport output was truncated; it is
+  not represented as a complete state-machine audit trail.
+- Added the CLI, Chinese operating guide, and offline tests. Supervisor
+  validation passed: the workflow suite reports `12 passed`, the full offline
+  project suite reports `61 passed`, and `doctor` reports `ok=true` with
+  `network_request_made=false`. The real `.env` has the required key, base URL,
+  model, and one-call policy without exposing the secret value.
+
+## 2026-09-17 — Course Explorer workflow task rejected and superseded
+
+- Task `CRP-20260917-050544-965827BD` consumed its single DeepSeek V4.1 Flash
+  attempt. The configured API call failed with a connection error before any
+  implementation response or code was produced; the audit record contains the
+  redacted request metadata and failure evidence, not a fabricated result.
+- GPT-5.6 Luna independently reviewed the failure and recorded `blocked` with
+  no changed implementation files. GPT-5.6 Sol then evaluated all seven fixed
+  acceptance criteria as failed because there was no implementation artifact
+  to verify, recorded `rejected`, and did not retry DeepSeek under the same
+  task ID.
+- The rejected task was superseded by linked revision
+  `CRP-20260917-052202-B816E890`. The revision retains the original objective,
+  allowlist, and acceptance criteria while requiring an approved runtime with
+  outbound HTTPS access before its one executor attempt is consumed. The new
+  task remains `planned`; no Course Explorer implementation is claimed.
+- Audit verification passed for both the superseded task and its planned
+  revision.

@@ -12,24 +12,29 @@
 
 ## 2. Agent roles
 
-### DeepSeek executor
+### Required three-role workflow
 
-DeepSeek V4 Flash is the primary code and analysis executor. All generated implementation code, data-analysis code, dashboard code, and first-pass analytical explanations must come from `deepseek-v4-flash` through the local API configuration.
+Repository development tasks use the auditable workflow in
+`docs/AGENT_WORKFLOW.md`:
 
-DeepSeek must follow the fixed project phases and current phase input. It must not modify another repository, change the agreed data windows, invent unavailable fields, or describe an unverified output as complete.
+1. GPT-5.6 Sol creates a unique task, fixes its scope and acceptance criteria,
+   and makes the final acceptance decision.
+2. DeepSeek V4.1 Flash is the primary implementation executor. It is called
+   exactly once per task ID; success, protocol failure, timeout, and empty
+   output all consume that one attempt.
+3. GPT-5.6 Luna reviews the result and directly records or applies necessary
+   corrections. A failed execution is recorded as `blocked`. DeepSeek is not
+   called again for review feedback.
+4. If Sol rejects the result, Sol must rewrite the instructions as a new,
+   linked task ID. The rejected task remains immutable and is superseded.
 
-### User-authorized implementation exception (this follow-up only)
+DeepSeek must follow the fixed project phases and current task input. It must
+not modify another repository, change the agreed data windows, invent
+unavailable fields, or describe an unverified output as complete.
 
-For the explicit 2026-09 follow-up requesting the independent six-year
-course-trajectory extension, the user authorized the Luna implementation
-sub-agent to write primary code, scripts, tests, and generated artifacts
-inside this repository. Codex remains the supervisor/reviewer. This is a
-one-turn, user-scoped exception and does not change the default DeepSeek
-implementation role for future work.
+### Sol supervisor and final reviewer
 
-### Codex supervisor and reviewer
-
-Codex is the supervising reviewer, not the primary feature-code author and not a task scheduler. Codex is responsible for:
+Sol is the supervising reviewer, not the primary feature-code author. Sol is responsible for:
 
 - inspecting and understanding the dataset and its documented field meanings;
 - reviewing DeepSeek-returned code for logical correctness and scope compliance;
@@ -40,7 +45,12 @@ Codex is the supervising reviewer, not the primary feature-code author and not a
 - updating the repository history log with evidence, decisions, rejected outputs, and current status;
 - keeping project results separate from unsupported ATLAS resume claims.
 
-Codex does not create background schedules, agent task queues, or delegated work plans. Codex follows the already agreed phase order in `PROJECT_SCOPE.md`. Codex may directly edit governance, configuration, review, and history documents, but primary implementation changes must be returned by DeepSeek and reviewed before acceptance.
+The workflow is a user-authorized local audit state machine, not a background
+scheduler or autonomous task queue. Sol follows the agreed phase order in
+`PROJECT_SCOPE.md`. Sol may directly edit governance, configuration, review,
+and history documents. Luna may directly correct implementation defects after
+its review; those changed files and their hashes must be recorded before Sol
+can accept the task.
 
 The deterministic pipeline must remain runnable after code generation without calling an LLM. DeepSeek is used to produce code and analysis, not as a runtime dependency for ingestion, cleaning, metrics, models, or dashboard rendering.
 

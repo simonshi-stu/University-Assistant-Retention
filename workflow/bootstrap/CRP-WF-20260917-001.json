@@ -1,0 +1,10 @@
+{
+  "task_id": "CRP-WF-20260917-001",
+  "record_type": "pre_workflow_bootstrap",
+  "date": "2026-09-17",
+  "deepseek_attempts": 1,
+  "status": "deepseek_failed",
+  "outcome": "API returned no final visible content; the attempt was not retried.",
+  "secrets_recorded": false,
+  "verifiable_by_new_state_machine": false
+}

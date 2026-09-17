@@ -1,0 +1,23 @@
+{
+  "task_id": "CRP-WF-20260917-002",
+  "parent_task_id": "CRP-WF-20260917-001",
+  "record_type": "pre_workflow_bootstrap",
+  "date": "2026-09-17",
+  "deepseek_attempts": 1,
+  "status": "sol_accepted_bootstrap",
+  "outcome": "A unified diff was returned, but the tool transport truncated the captured output. Luna/Sol reconstruction and correction were therefore required.",
+  "luna_review": {
+    "verdict": "corrected",
+    "summary": "Reconstructed the truncated files, preserved existing repository governance, fixed state-transition and one-call safeguards, and added offline tests."
+  },
+  "sol_acceptance": {
+    "decision": "accepted",
+    "evidence": [
+      "12 workflow tests passed",
+      "61 full-project tests passed",
+      "offline doctor returned ok=true and network_request_made=false"
+    ]
+  },
+  "secrets_recorded": false,
+  "verifiable_by_new_state_machine": false
+}
