@@ -901,3 +901,36 @@ all-zero one-hot values by the documented `handle_unknown` policy.
   task remains `planned`; no Course Explorer implementation is claimed.
 - Audit verification passed for both the superseded task and its planned
   revision.
+
+## 2026-09-17 — Luna review: Course Explorer revision
+
+- Integrated the DeepSeek Course Explorer extension additively: normalized
+  models/schema/parser, cache-first acquisition records, quality evidence,
+  timetable-overlap conflict edges, offline fixtures/tests, CLI helpers, and a
+  verified-data Streamlit entry were added without replacing the established
+  GPA/phase 5–6 pipeline or editing `dashboard/`.
+- Preserved the original acquisition API and merged the new cache adapter into
+  `src/course_retention/acquisition.py` so existing WAF/manifest behavior and
+  tests remain intact.
+- Added README and data-dictionary documentation for outputs, field grain,
+  WAF/cache limitations, and the distinction between timetable overlap and
+  observed student registration conflict.
+- Full offline validation passed: `72 passed`. Cache-only acquisition and table
+  build produced a blocked evidence row for `2023-fall/CS` without network use;
+  conflict CLI produced an empty output because no verified source data exist.
+- Existing user-facing `dashboard/` was intentionally unchanged per the task
+  allowlist and dashboard change boundary. The new Streamlit entry preserves an
+  explicit insufficient-data gate; no verified live Course Explorer dataset is
+  claimed.
+
+## 2026-09-17 — Course Explorer revision: reproducible offline evidence and AppTest
+
+- Corrected `src/course_retention/app.py` so the documented file-executed
+  Streamlit entry works with `python -m streamlit run src/course_retention/app.py`
+  as well as package imports; an empty isolated root shows the explicit
+  insufficient-data gate without scheduling results.
+- Added `--output-root` to acquisition, table-build, and conflict CLI commands,
+  and made the default cache-only run cover all nine 2021–2023 spring/summer/fall
+  terms without overwriting existing generated outputs.
+- Added focused CLI and Streamlit AppTest regression coverage. Live UIUC data
+  remain unavailable and no `dashboard/` files were changed.

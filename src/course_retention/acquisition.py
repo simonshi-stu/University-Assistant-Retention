@@ -238,3 +238,236 @@ def acquire(years: Sequence[int] = (2021, 2022, 2023), terms: Sequence[str] = ("
     if failures and not allow_partial:
         raise AcquisitionIncompleteError(manifest_path)
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# Course Explorer cache-first extension
+#
+# The original acquisition API above is retained for the established GPA and
+# root-XML workflow.  The names below are deliberately additive so existing
+# callers and tests keep their contracts while the Course Explorer normalized
+# tables can use a lawful per-resource cache.
+
+from dataclasses import asdict as _asdict
+from urllib.parse import urljoin
+
+from .config import COURSE_EXPLORER_BASE, DEFAULT_USER_AGENT
+from .parsers.uiuc_xml import parse_course_xml, parse_subject_xml
+
+
+def _explorer_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+@dataclass
+class AcquisitionRecord:
+    term: str
+    subject: str
+    resource: str
+    url: str
+    status: str
+    http_status: str = ""
+    sha256: str = ""
+    bytes: int = 0
+    cache_path: str = ""
+    fetched_at: str = ""
+    error: str = ""
+    source_rows: int = 0
+    normalized_rows: int = 0
+    missing_critical_fields: str = ""
+
+
+def acquisition_row(record: AcquisitionRecord) -> dict:
+    return _asdict(record)
+
+
+class CacheAdapter:
+    """Content-addressed local cache for Course Explorer resources."""
+
+    def __init__(self, cache_dir: Path) -> None:
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _key(url: str) -> str:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+    def path_for(self, url: str) -> Path:
+        return self.cache_dir / f"{self._key(url)}.bin"
+
+    def meta_path_for(self, url: str) -> Path:
+        return self.cache_dir / f"{self._key(url)}.json"
+
+    def get(self, url: str) -> Optional[bytes]:
+        path = self.path_for(url)
+        return path.read_bytes() if path.exists() else None
+
+    def get_meta(self, url: str) -> dict:
+        path = self.meta_path_for(url)
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def put(self, url: str, content: bytes, http_status: int = 200, fetched_at: Optional[str] = None) -> None:
+        self.path_for(url).write_bytes(content)
+        self.meta_path_for(url).write_text(
+            json.dumps(
+                {
+                    "url": url,
+                    "http_status": str(http_status),
+                    "fetched_at": fetched_at or _explorer_now_iso(),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "bytes": len(content),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+
+@dataclass
+class ExplorerFetchResult:
+    url: str
+    status: str
+    http_status: str
+    content: Optional[bytes]
+    sha256: str
+    bytes: int
+    cache_path: str
+    fetched_at: str
+    error: str = ""
+
+
+def _explorer_http_get(url: str, timeout: int = 30):
+    return requests.get(
+        url,
+        headers={"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/xml,text/xml,*/*;q=0.8"},
+        timeout=timeout,
+        allow_redirects=True,
+    )
+
+
+# Kept as a module-level seam for offline tests and for explicit network
+# policy review.  It is not called on cache hits or when allow_live=False.
+_http_get = _explorer_http_get
+
+
+def fetch_url(url: str, cache: CacheAdapter, *, allow_live: bool = True, timeout: int = 30) -> ExplorerFetchResult:
+    cached = cache.get(url)
+    if cached is not None:
+        metadata = cache.get_meta(url)
+        return ExplorerFetchResult(
+            url=url,
+            status="cache",
+            http_status=str(metadata.get("http_status", "cache")),
+            content=cached,
+            sha256=hashlib.sha256(cached).hexdigest(),
+            bytes=len(cached),
+            cache_path=str(cache.path_for(url)),
+            fetched_at=metadata.get("fetched_at", _explorer_now_iso()),
+        )
+    if not allow_live:
+        return ExplorerFetchResult(
+            url=url,
+            status="blocked",
+            http_status="",
+            content=None,
+            sha256="",
+            bytes=0,
+            cache_path=str(cache.path_for(url)),
+            fetched_at=_explorer_now_iso(),
+            error="live acquisition disabled; cache miss",
+        )
+    try:
+        response = _http_get(url, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - preserve acquisition evidence
+        return ExplorerFetchResult(
+            url=url,
+            status="network_error",
+            http_status="",
+            content=None,
+            sha256="",
+            bytes=0,
+            cache_path=str(cache.path_for(url)),
+            fetched_at=_explorer_now_iso(),
+            error=str(exc),
+        )
+    status_code = str(getattr(response, "status_code", ""))
+    if status_code == "200":
+        content = response.content
+        cache.put(url, content, http_status=200)
+        return ExplorerFetchResult(
+            url=url,
+            status="ok",
+            http_status=status_code,
+            content=content,
+            sha256=hashlib.sha256(content).hexdigest(),
+            bytes=len(content),
+            cache_path=str(cache.path_for(url)),
+            fetched_at=_explorer_now_iso(),
+        )
+    status = "blocked" if status_code in {"401", "403", "429"} else "http_error"
+    return ExplorerFetchResult(
+        url=url,
+        status=status,
+        http_status=status_code,
+        content=None,
+        sha256="",
+        bytes=0,
+        cache_path=str(cache.path_for(url)),
+        fetched_at=_explorer_now_iso(),
+        error=f"HTTP {status_code}; WAF/rate-limit/block evidence preserved; no bypass attempted",
+    )
+
+
+def _subject_url(term: str, subject: str) -> str:
+    year, term_code = term.split("-", 1)
+    return f"{COURSE_EXPLORER_BASE}/{year}/{term_code}/{subject}.xml"
+
+
+def record_from_fetch(result: ExplorerFetchResult, term: str, subject: str, resource: str) -> AcquisitionRecord:
+    return AcquisitionRecord(
+        term=term,
+        subject=subject,
+        resource=resource,
+        url=result.url,
+        status=result.status,
+        http_status=result.http_status,
+        sha256=result.sha256,
+        bytes=result.bytes,
+        cache_path=result.cache_path,
+        fetched_at=result.fetched_at,
+        error=result.error,
+    )
+
+
+def ingest_subject(term: str, subject: str, cache: CacheAdapter, *, allow_live: bool = True):
+    records: List[AcquisitionRecord] = []
+    parsed_courses = []
+    subject_url = _subject_url(term, subject)
+    subject_result = fetch_url(subject_url, cache, allow_live=allow_live)
+    records.append(record_from_fetch(subject_result, term, subject, "subject"))
+    if subject_result.status not in {"ok", "cache"} or not subject_result.content:
+        return records, parsed_courses
+    try:
+        refs = parse_subject_xml(subject_result.content)
+    except Exception as exc:  # noqa: BLE001 - preserve parser failure in record
+        records[-1].error = f"parse error: {exc}"
+        return records, parsed_courses
+    for ref in refs:
+        href = ref.get("href") or ""
+        if not href:
+            continue
+        if href.startswith("/"):
+            href = urljoin(COURSE_EXPLORER_BASE, href)
+        course_result = fetch_url(href, cache, allow_live=allow_live)
+        records.append(record_from_fetch(course_result, term, subject, f"course:{ref.get('id', '')}"))
+        if course_result.status in {"ok", "cache"} and course_result.content:
+            try:
+                parsed_courses.append(parse_course_xml(course_result.content, term))
+            except Exception as exc:  # noqa: BLE001 - preserve parser failure
+                records[-1].error = f"parse error: {exc}"
+    return records, parsed_courses

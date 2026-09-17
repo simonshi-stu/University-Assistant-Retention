@@ -7,7 +7,37 @@ beyond module import.
 """
 
 from pathlib import Path
+import os
 from typing import Final, Iterable
+
+
+# Course Explorer extension constants.  These are additive to the established
+# GPA pipeline configuration and are intentionally cache-first in callers.
+COURSE_EXPLORER_BASE: Final[str] = "https://courses.illinois.edu/cisapp/explorer/schedule"
+DEFAULT_USER_AGENT: Final[str] = "course-retention/0.1 (educational planning; local contact)"
+DEEPSEEK_ENDPOINT: Final[str] = "https://api.deepseek.com"
+TERM_CODES: Final = ("spring", "summer", "fall")
+TARGET_TERMS: Final = tuple(
+    f"{year}-{term}" for year in (2021, 2022, 2023) for term in TERM_CODES
+)
+
+
+class Paths:
+    """Paths for the additive Course Explorer cache and normalized outputs."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self.processed = self.root / "data" / "processed"
+        self.cache = self.processed / "cache"
+        self.tables = self.processed / "tables"
+        self.quality = self.processed / "quality_report.csv"
+        self.outputs = self.root / "outputs"
+
+
+def default_paths(root: Path | None = None) -> Paths:
+    configured_root = os.environ.get("COURSE_RETENTION_ROOT", "").strip()
+    selected_root = Path(root) if root is not None else Path(configured_root or REPO_ROOT)
+    return Paths(selected_root)
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 

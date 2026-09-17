@@ -113,6 +113,47 @@ section id、student id 或 attendance 字段，不能由此支持 section 冲�
 - 无运行时 LLM（No runtime LLM）。
 - 排课冲突、评论情感和 Excel 仍未声称完成；后续工作按 `PROJECT_SCOPE.md` 的项目范围管理。
 
+## Course Explorer 课表扩展（2021–2023）
+
+本扩展仅处理官方 Course Explorer XML 的课程、section/CRN、教师、meeting
+日期/星期/时间/房间、学分、GenEd、Part of Term 和 prerequisite。它不接入
+enrollment、capacity 或 waitlist。默认只读本地缓存；缓存未命中时不会联网，
+除非明确传入 `--live` 并自行确认允许 outbound HTTPS：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_doctor.py
+.\.venv\Scripts\python.exe scripts\run_acquisition.py --terms 2023-fall --subjects CS
+.\.venv\Scripts\python.exe scripts\build_tables.py --terms 2023-fall --subjects CS
+.\.venv\Scripts\python.exe scripts\run_conflicts.py
+```
+
+For a reproducible nine-term cache-only run isolated from existing generated
+files, pass the same temporary root to the three commands:
+
+```powershell
+$out = Join-Path $env:TEMP "course-retention-evidence"
+.\.venv\Scripts\python.exe scripts\run_acquisition.py --output-root $out
+.\.venv\Scripts\python.exe scripts\build_tables.py --output-root $out
+.\.venv\Scripts\python.exe scripts\run_conflicts.py --output-root $out
+```
+
+输出包括 `data/processed/tables/{courses,sections,meetings,instructors,gened,prerequisites}.csv`、
+`data/processed/acquisition_records.csv`、`data/processed/quality_report.csv` 和
+`outputs/conflict_edges.csv`。字段粒度和主键见
+[`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md)。HTTP 401/403/429、WAF
+challenge、网络错误和缓存未命中都会保留为采集证据；不会绕过访问保护或伪造
+缺失数据。离线 parser/冲突/缓存测试运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+冲突边只表示同一学期不同 section 的日期范围、星期和时间区间重叠；
+`ARRANGED` 与 `TBA` 不产生边。这不是观察到的学生注册冲突，因为当前公开数据
+没有学生注册事件或 section 级选课记录。新增 Streamlit 入口只有在 quality report
+标记 verified 且存在冲突边时显示结果，否则明确显示数据不足说明；现有主看板的
+排课结论仍按数据不足处理。
+
 ## 预测分析与本地看板（2026-09-11）
 
 本次已实现时间感知的预测分析和本地 Streamlit 看板。项目仍严格使用主窗口

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<course id="CS 101" href="https://courses.illinois.edu/cisapp/explorer/schedule/2023/fall/CS/101.xml">
+  <name>CS 101</name>
+  <title>Intro Computing: Engrg &amp; Sci</title>
+  <description>Introduction to computing for engineering and science students.</description>
+  <creditHours>3 hours</creditHours>
+  <genEdAttributes>
+    <genEdAttribute>QR</genEdAttribute>
+  </genEdAttributes>
+  <prerequisites>MATH 220 or equivalent.</prerequisites>
+  <sections>
+    <section id="10001">
+      <crn>10001</crn>
+      <sectionNumber>AL1</sectionNumber>
+      <partOfTerm>1</partOfTerm>
+      <startDate>2023-08-21</startDate>
+      <endDate>2023-12-06</endDate>
+      <creditHours>3</creditHours>
+      <instructors>
+        <instructor>
+          <name>Ada Lovelace</name>
+          <email>ada@example.edu</email>
+        </instructor>
+      </instructors>
+      <meetings>
+        <meeting>
+          <type>Lecture</type>
+          <days>MWF</days>
+          <start>10:00 AM</start>
+          <end>10:50 AM</end>
+          <building>Siebel</building>
+          <room>1404</room>
+          <startDate>2023-08-21</startDate>
+          <endDate>2023-12-06</endDate>
+        </meeting>
+      </meetings>
+    </section>
+    <section id="10002">
+      <crn>10002</crn>
+      <sectionNumber>AL2</sectionNumber>
+      <partOfTerm>1</partOfTerm>
+      <startDate>2023-08-21</startDate>
+      <endDate>2023-12-06</endDate>
+      <creditHours>3</creditHours>
+      <instructors>
+        <instructor>
+          <name>Grace Hopper</name>
+        </instructor>
+      </instructors>
+      <meetings>
+        <meeting>
+          <type>Lecture</type>
+          <days>MWF</days>
+          <start>10:30 AM</start>
+          <end>11:20 AM</end>
+          <building>Siebel</building>
+          <room>1214</room>
+        </meeting>
+      </meetings>
+    </section>
+    <section id="10003">
+      <crn>10003</crn>
+      <sectionNumber>AL3</sectionNumber>
+      <partOfTerm>1</partOfTerm>
+      <startDate>2023-08-21</startDate>
+      <endDate>2023-12-06</endDate>
+      <creditHours>3</creditHours>
+      <meetings>
+        <meeting>
+          <type>Lecture</type>
+          <days>ARRANGED</days>
+          <start>ARRANGED</start>
+          <end>ARRANGED</end>
+          <room>ARRANGED</room>
+        </meeting>
+      </meetings>
+    </section>
+    <section id="10004">
+      <crn>10004</crn>
+      <sectionNumber>AL4</sectionNumber>
+      <partOfTerm>1</partOfTerm>
+      <startDate>2023-08-21</startDate>
+      <endDate>2023-12-06</endDate>
+      <creditHours>3</creditHours>
+      <meetings>
+        <meeting>
+          <type>Lecture</type>
+          <days>TBA</days>
+          <start>TBA</start>
+          <end>TBA</end>
+          <room>TBA</room>
+        </meeting>
+      </meetings>
+    </section>
+    <section id="10005">
+      <crn>10005</crn>
+      <sectionNumber>AL5</sectionNumber>
+      <partOfTerm>1</partOfTerm>
+      <startDate>2023-06-01</startDate>
+      <endDate>2023-06-30</endDate>
+      <creditHours>3</creditHours>
+      <meetings>
+        <meeting>
+          <type>Lecture</type>
+          <days>MWF</days>
+          <start>10:00 AM</start>
+          <end>10:50 AM</end>
+          <building>Siebel</building>
+          <room>1404</room>
+          <startDate>2023-06-01</startDate>
+          <endDate>2023-06-30</endDate>
+        </meeting>
+      </meetings>
+    </section>
+  </sections>
+</course>
+
+
